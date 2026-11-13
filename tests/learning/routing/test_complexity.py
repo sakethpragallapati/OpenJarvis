@@ -14,6 +14,7 @@ from openjarvis.learning.routing.complexity import (
     is_thinking_model,
     score_complexity,
 )
+from tests._platform import SUBPROCESS_STARTUP_ALLOWANCE
 
 
 class TestScoreComplexity:
@@ -94,7 +95,7 @@ class TestScoreComplexity:
             text=True,
             capture_output=True,
             check=True,
-            timeout=10,
+            timeout=10 + SUBPROCESS_STARTUP_ALLOWANCE,
         )
 
     def test_reasoning_and_multi_step_combined(self) -> None:

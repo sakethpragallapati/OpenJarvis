@@ -12,6 +12,7 @@ from pathlib import Path
 from openjarvis.core.events import EventBus, EventType
 from openjarvis.core.types import ToolCall, ToolResult
 from openjarvis.tools._stubs import BaseTool, ToolExecutor, ToolSpec
+from tests._platform import SUBPROCESS_STARTUP_ALLOWANCE
 
 
 class SlowTool(BaseTool):
@@ -189,7 +190,7 @@ assert not result.success
             env=env,
             capture_output=True,
             text=True,
-            timeout=3,
+            timeout=3 + SUBPROCESS_STARTUP_ALLOWANCE,
             check=False,
         )
         assert completed.returncode == 0, completed.stderr

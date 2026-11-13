@@ -409,9 +409,17 @@ class PrivacyScanner:
             self.check_dns,
         ]
 
+    @staticmethod
+    def _current_platform() -> str:
+        # Windows has no FileVault/LUKS equivalent check yet; it must not be
+        # reported as Linux, or Linux-only results (LUKS) show up on Windows.
+        if sys.platform in ("darwin", "win32"):
+            return sys.platform
+        return "linux"
+
     def run_all(self) -> list[ScanResult]:
         """Run all checks, filter to the current platform, hide 'skip' results."""
-        current_plat = "darwin" if sys.platform == "darwin" else "linux"
+        current_plat = self._current_platform()
         results: list[ScanResult] = []
         for check_fn in self._get_all_checks():
             result = check_fn()
@@ -424,12 +432,14 @@ class PrivacyScanner:
 
     def run_quick(self) -> list[ScanResult]:
         """Run only critical checks: disk encryption + cloud sync agents."""
-        current_plat = "darwin" if sys.platform == "darwin" else "linux"
+        current_plat = self._current_platform()
         quick_checks: list[Callable[[], ScanResult]]
         if current_plat == "darwin":
             quick_checks = [self.check_filevault, self.check_cloud_sync_agents]
-        else:
+        elif current_plat == "linux":
             quick_checks = [self.check_luks, self.check_cloud_sync_agents]
+        else:
+            quick_checks = [self.check_cloud_sync_agents]
         results = []
         for check_fn in quick_checks:
             result = check_fn()

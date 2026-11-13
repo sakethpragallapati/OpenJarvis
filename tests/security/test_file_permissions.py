@@ -4,13 +4,25 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 import tempfile
 from pathlib import Path
+
+import pytest
+
+_posix_modes = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "POSIX mode bits; on Windows os.chmod only toggles read-only and "
+        "the user profile is protected by inherited NTFS ACLs"
+    ),
+)
 
 
 class TestSecureMkdir:
     """secure_mkdir should create directories with 0o700."""
 
+    @_posix_modes
     def test_creates_directory_with_700(self) -> None:
         from openjarvis.security.file_utils import secure_mkdir
 
@@ -29,6 +41,7 @@ class TestSecureMkdir:
             result = secure_mkdir(target)
             assert result.is_dir()
 
+    @_posix_modes
     def test_existing_directory_gets_permission_fix(self) -> None:
         from openjarvis.security.file_utils import secure_mkdir
 
@@ -43,6 +56,7 @@ class TestSecureMkdir:
 class TestSecureCreate:
     """secure_create should create files with 0o600."""
 
+    @_posix_modes
     def test_creates_file_with_600(self) -> None:
         from openjarvis.security.file_utils import secure_create
 
@@ -53,6 +67,7 @@ class TestSecureCreate:
             mode = stat.S_IMODE(os.stat(target).st_mode)
             assert mode == 0o600
 
+    @_posix_modes
     def test_existing_file_gets_permission_fix(self) -> None:
         from openjarvis.security.file_utils import secure_create
 
@@ -64,6 +79,7 @@ class TestSecureCreate:
             mode = stat.S_IMODE(os.stat(target).st_mode)
             assert mode == 0o600
 
+    @_posix_modes
     def test_creates_parent_directory_with_700(self) -> None:
         from openjarvis.security.file_utils import secure_create
 

@@ -28,10 +28,11 @@ def instrumented_generate(
     bus.publish(EventType.INFERENCE_START, {"model": model, "engine": engine.engine_id})
 
     t0 = time.time()
+    p0 = time.perf_counter()
     result = engine.generate(
         messages, model=model, temperature=temperature, max_tokens=max_tokens, **kwargs
     )
-    latency = time.time() - t0
+    latency = time.perf_counter() - p0
 
     usage = result.get("usage", {})
     rec = TelemetryRecord(

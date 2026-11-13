@@ -18,6 +18,8 @@ def store():
     with tempfile.TemporaryDirectory() as tmpdir:
         s = TraceStore(Path(tmpdir) / "traces.db")
         yield s
+        # Windows can't delete the temp dir while SQLite holds the file open.
+        s.close()
 
 
 def _make_trace(trace_id: str, query: str, result: str, agent: str = "test") -> Trace:

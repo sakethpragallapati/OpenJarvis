@@ -6,6 +6,7 @@ from pathlib import Path
 
 from openjarvis.cli import _bg_state
 from openjarvis.cli._chat_banner import render_startup_banner
+from tests.install.conftest import needs_colon_filenames
 
 
 def test_banner_empty_when_all_ready(tmp_openjarvis_home: Path) -> None:
@@ -24,6 +25,7 @@ def test_banner_shows_rust_building(tmp_openjarvis_home: Path) -> None:
     assert "building" in banner.lower()
 
 
+@needs_colon_filenames
 def test_banner_shows_model_downloading(tmp_openjarvis_home: Path) -> None:
     (tmp_openjarvis_home / ".state" / "extension-built").write_text("")
     models_dir = tmp_openjarvis_home / ".state" / "models"

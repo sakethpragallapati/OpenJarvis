@@ -15,6 +15,23 @@ from click.testing import CliRunner
 
 from openjarvis.cli.model import model
 
+
+def _can_symlink() -> bool:
+    """Windows only allows symlinks with Developer Mode or admin rights."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            (Path(tmp) / "link").symlink_to(tmp, target_is_directory=True)
+        except OSError:
+            return False
+    return True
+
+
+_needs_symlinks = pytest.mark.skipif(
+    not _can_symlink(), reason="creating symlinks needs Developer Mode on Windows"
+)
+
 model_module = importlib.import_module("openjarvis.cli.model")
 
 
@@ -248,6 +265,8 @@ class TestModelConvert:
                 "--output",
                 str(output_dir),
             ],
+            # Wide enough that long (Windows) temp paths don't wrap the hint.
+            env={"COLUMNS": "400"},
         )
 
         assert result.exit_code == 0
@@ -470,6 +489,7 @@ class TestModelConvert:
         assert staged.joinpath("new.bin").read_bytes() == b"new"
         assert list(tmp_path.glob(".model.backup-*")) == []
 
+    @_needs_symlinks
     def test_force_replaces_symlink_without_touching_target(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -518,6 +538,7 @@ class TestModelConvert:
         assert (output_dir / "config.json").is_file()
         assert sentinel.read_text(encoding="utf-8") == "keep"
 
+    @_needs_symlinks
     def test_convert_refuses_empty_directory_symlink_without_force(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

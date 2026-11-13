@@ -11,26 +11,27 @@ Requires the ``colbert-ai`` and ``torch`` packages::
 
 from __future__ import annotations
 
+import importlib.util
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-try:
-    import torch  # noqa: F401
-except ImportError as exc:
+# Check for the dependencies without importing them: ``openjarvis.tools``
+# imports this module on every CLI start, and importing torch costs several
+# seconds even when colbert-ai is missing and the backend can't register.
+# Both are imported lazily where they are used.
+if importlib.util.find_spec("torch") is None:
     raise ImportError(
         "PyTorch is required for the ColBERT memory backend. "
         "Install it with:\n\n"
         "    pip install torch\n"
-    ) from exc
+    )
 
-try:
-    from colbert.modeling.checkpoint import Checkpoint  # noqa: F401
-except ImportError as exc:
+if importlib.util.find_spec("colbert") is None:
     raise ImportError(
         "The 'colbert-ai' package is required for the ColBERT "
         "memory backend. Install it with:\n\n"
         "    pip install colbert-ai\n"
-    ) from exc
+    )
 
 from openjarvis.core.events import EventType, get_event_bus
 from openjarvis.core.registry import MemoryRegistry

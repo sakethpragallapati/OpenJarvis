@@ -8,6 +8,7 @@ dataclass works without any optional deps; :class:`LoRATrainer` raises
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,32 +17,41 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Optional imports -----------------------------------------------------------
-try:
-    import torch
+# Availability is probed without importing: ``openjarvis.learning`` imports
+# this module eagerly, and importing transformers (which drags in pandas and
+# scikit-learn) took ~30 s on a Windows laptop where it was only installed as
+# a dependency of the Kokoro voice. The modules load on first real use.
+HAS_TORCH = importlib.util.find_spec("torch") is not None
+HAS_TRANSFORMERS = importlib.util.find_spec("transformers") is not None
+HAS_PEFT = importlib.util.find_spec("peft") is not None
 
-    HAS_TORCH = True
-except ImportError:
-    HAS_TORCH = False
-    torch = None  # type: ignore[assignment]
+torch: Any = None
+AutoModelForCausalLM: Any = None
+AutoTokenizer: Any = None
+LoraConfig: Any = None
+TaskType: Any = None
+get_peft_model: Any = None
 
-try:
-    from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    HAS_TRANSFORMERS = True
-except ImportError:
-    HAS_TRANSFORMERS = False
-    AutoModelForCausalLM = None  # type: ignore[assignment,misc]
-    AutoTokenizer = None  # type: ignore[assignment,misc]
+def _load_optional_deps() -> None:
+    """Import torch / transformers / peft into module globals (idempotent)."""
+    global torch, AutoModelForCausalLM, AutoTokenizer
+    global LoraConfig, TaskType, get_peft_model
+    if HAS_TORCH and torch is None:
+        import torch as _torch
 
-try:
-    from peft import LoraConfig, TaskType, get_peft_model
+        torch = _torch
+    if HAS_TRANSFORMERS and AutoModelForCausalLM is None:
+        from transformers import AutoModelForCausalLM as _model
+        from transformers import AutoTokenizer as _tokenizer
 
-    HAS_PEFT = True
-except ImportError:
-    HAS_PEFT = False
-    LoraConfig = None  # type: ignore[assignment,misc]
-    TaskType = None  # type: ignore[assignment,misc]
-    get_peft_model = None  # type: ignore[assignment,misc]
+        AutoModelForCausalLM, AutoTokenizer = _model, _tokenizer
+    if HAS_PEFT and LoraConfig is None:
+        from peft import LoraConfig as _config
+        from peft import TaskType as _task
+        from peft import get_peft_model as _get
+
+        LoraConfig, TaskType, get_peft_model = _config, _task, _get
 
 
 # ---------------------------------------------------------------------------
@@ -56,8 +66,9 @@ def _select_device(hint: Optional[str] = None) -> str:
     """
     if hint is not None:
         return hint
-    if not HAS_TORCH or torch is None:
+    if not HAS_TORCH:
         return "cpu"
+    _load_optional_deps()
     if torch.cuda.is_available():
         return "cuda"
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -141,6 +152,7 @@ class LoRATrainer:
                 "torch is required for LoRATrainer. "
                 "Install with: pip install torch transformers peft"
             )
+        _load_optional_deps()
 
         self.config = config
         self.model_name = model_name

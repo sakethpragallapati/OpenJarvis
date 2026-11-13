@@ -97,7 +97,8 @@ class InstrumentedEngine(InferenceEngine):
 
         gpu_sample: Optional[GpuSample] = None
         energy_sample: Optional[Any] = None
-        t0 = time.time()
+        t0 = time.time()  # record timestamp (wall clock)
+        p0 = time.perf_counter()  # durations: time.time() ticks ~15 ms on Windows
 
         # Prefer EnergyMonitor over legacy GpuMonitor
         if self._energy_monitor is not None:
@@ -127,7 +128,7 @@ class InstrumentedEngine(InferenceEngine):
                 **kwargs,
             )
 
-        latency = time.time() - t0
+        latency = time.perf_counter() - p0
 
         usage = result.get("usage", {})
         completion_tokens = usage.get("completion_tokens", 0)
@@ -325,9 +326,16 @@ class InstrumentedEngine(InferenceEngine):
         energy_sample: Optional[Any],
         gpu_sample: Optional[GpuSample],
         usage: Optional[Dict[str, Any]] = None,
+        p0: Optional[float] = None,
     ) -> None:
-        """Publish telemetry after a streaming call completes successfully."""
-        latency = time.time() - t0
+        """Publish telemetry after a streaming call completes successfully.
+
+        ``p0`` and ``token_timestamps`` are ``time.perf_counter()`` values when
+        ``p0`` is given; ``t0`` stays the wall-clock record timestamp.
+        """
+        base = t0 if p0 is None else p0
+        now = time.time() if p0 is None else time.perf_counter()
+        latency = now - base
         usage_data = usage or {}
 
         if usage is None:
@@ -355,7 +363,7 @@ class InstrumentedEngine(InferenceEngine):
                 else reported_total
             )
 
-        ttft = token_timestamps[0] - t0 if token_timestamps else 0.0
+        ttft = token_timestamps[0] - base if token_timestamps else 0.0
         throughput = completion_tokens / latency if latency > 0 else 0.0
 
         itl_values_ms = [
@@ -506,6 +514,7 @@ class InstrumentedEngine(InferenceEngine):
         )
 
         t0 = time.time()
+        p0 = time.perf_counter()
         token_timestamps: list[float] = []
         token_count = 0
 
@@ -521,7 +530,7 @@ class InstrumentedEngine(InferenceEngine):
                     max_tokens=max_tokens,
                     **kwargs,
                 ):
-                    token_timestamps.append(time.time())
+                    token_timestamps.append(time.perf_counter())
                     token_count += 1
                     yield token
         elif self._gpu_monitor is not None:
@@ -533,7 +542,7 @@ class InstrumentedEngine(InferenceEngine):
                     max_tokens=max_tokens,
                     **kwargs,
                 ):
-                    token_timestamps.append(time.time())
+                    token_timestamps.append(time.perf_counter())
                     token_count += 1
                     yield token
         else:
@@ -544,13 +553,14 @@ class InstrumentedEngine(InferenceEngine):
                 max_tokens=max_tokens,
                 **kwargs,
             ):
-                token_timestamps.append(time.time())
+                token_timestamps.append(time.perf_counter())
                 token_count += 1
                 yield token
 
         self._publish_stream_telemetry(
             model=model,
             t0=t0,
+            p0=p0,
             token_timestamps=token_timestamps,
             fallback_token_count=token_count,
             energy_sample=energy_sample,
@@ -580,6 +590,7 @@ class InstrumentedEngine(InferenceEngine):
         )
 
         t0 = time.time()
+        p0 = time.perf_counter()
         token_timestamps: list[float] = []
         content_chunk_count = 0
         usage: Optional[Dict[str, Any]] = None
@@ -596,7 +607,7 @@ class InstrumentedEngine(InferenceEngine):
                     **kwargs,
                 ):
                     if chunk.content:
-                        token_timestamps.append(time.time())
+                        token_timestamps.append(time.perf_counter())
                         content_chunk_count += 1
                     if chunk.usage is not None:
                         usage = chunk.usage
@@ -611,7 +622,7 @@ class InstrumentedEngine(InferenceEngine):
                     **kwargs,
                 ):
                     if chunk.content:
-                        token_timestamps.append(time.time())
+                        token_timestamps.append(time.perf_counter())
                         content_chunk_count += 1
                     if chunk.usage is not None:
                         usage = chunk.usage
@@ -625,7 +636,7 @@ class InstrumentedEngine(InferenceEngine):
                 **kwargs,
             ):
                 if chunk.content:
-                    token_timestamps.append(time.time())
+                    token_timestamps.append(time.perf_counter())
                     content_chunk_count += 1
                 if chunk.usage is not None:
                     usage = chunk.usage
@@ -634,6 +645,7 @@ class InstrumentedEngine(InferenceEngine):
         self._publish_stream_telemetry(
             model=model,
             t0=t0,
+            p0=p0,
             token_timestamps=token_timestamps,
             fallback_token_count=content_chunk_count,
             energy_sample=energy_sample,

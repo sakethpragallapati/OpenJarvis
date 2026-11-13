@@ -64,6 +64,7 @@ class TestTraceStore:
         cwd = tmp_path / "cwd"
         cwd.mkdir()
         monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))  # what Windows expands ~ from
         monkeypatch.chdir(cwd)
 
         store = TraceStore("~/.openjarvis/traces.db")

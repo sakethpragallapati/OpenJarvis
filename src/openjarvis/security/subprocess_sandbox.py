@@ -6,6 +6,7 @@ import logging
 import os
 import signal
 import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
@@ -26,6 +27,19 @@ _SAFE_ENV_VARS = frozenset(
         "TZ",
     }
 )
+# Non-secret variables Windows processes need to start at all: without
+# SYSTEMROOT a child Python can't seed its RNG, and cmd.exe needs COMSPEC.
+if sys.platform == "win32":
+    _SAFE_ENV_VARS = _SAFE_ENV_VARS | {
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "WINDIR",
+        "COMSPEC",
+        "PATHEXT",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+    }
 
 
 @dataclass(slots=True)
@@ -61,6 +75,17 @@ def build_safe_env(
 
 def kill_process_tree(pid: int) -> None:
     """Kill a process and all its children (best effort)."""
+    if sys.platform == "win32":
+        # No process groups or SIGKILL on Windows; taskkill /T walks the tree.
+        try:
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(pid)],
+                capture_output=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            logger.debug("Failed to kill process %d: %s", pid, exc)
+        return
     try:
         os.killpg(os.getpgid(pid), signal.SIGTERM)
     except (OSError, ProcessLookupError) as exc:
@@ -69,6 +94,13 @@ def kill_process_tree(pid: int) -> None:
         os.kill(pid, signal.SIGKILL)
     except (OSError, ProcessLookupError) as exc:
         logger.debug("Failed to kill process %d: %s", pid, exc)
+
+
+def _new_process_group_kwargs() -> Dict[str, object]:
+    """Start the child in its own process group so the whole tree can be killed."""
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}  # setsid() in the child
 
 
 def run_sandboxed(
@@ -102,7 +134,7 @@ def run_sandboxed(
             text=True,
             env=env,
             cwd=cwd,
-            preexec_fn=os.setsid,  # New process group
+            **_new_process_group_kwargs(),
         )
         try:
             stdout, stderr = proc.communicate(timeout=timeout)

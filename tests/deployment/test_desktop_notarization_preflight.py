@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from tests._platform import needs_posix_shell
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,6 +27,7 @@ ROOT = Path(__file__).resolve().parents[2]
         ("temporary network failure", 1, "failed after 3 attempts"),
     ],
 )
+@needs_posix_shell
 def test_preflight_handles_notarytool_exit_status(
     tmp_path: Path, response: str, exit_code: int, diagnostic: str
 ) -> None:

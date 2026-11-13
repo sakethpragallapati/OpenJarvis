@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from openjarvis.cli.serve import serve
+from tests._platform import needs_posix_exec
 
 RENDER_BLUEPRINT = Path(__file__).resolve().parents[2] / "render.yaml"
 RENDER_DOC = Path(__file__).resolve().parents[2] / "docs/deployment/render.md"
@@ -55,6 +56,7 @@ def _run_fake_jarvis(tmp_path: Path, argv: list[str]) -> list[str]:
     return completed.stdout.rstrip(b"\0").decode().split("\0")
 
 
+@needs_posix_exec
 def test_render_selects_cloud_engine_through_the_serve_cli(tmp_path: Path) -> None:
     service = _service()
     command = service["dockerCommand"]
@@ -86,6 +88,7 @@ def test_render_selects_cloud_engine_through_the_serve_cli(tmp_path: Path) -> No
     assert _env_vars(service)["PORT"] == {"key": "PORT", "value": "10000"}
 
 
+@needs_posix_exec
 def test_docker_and_compose_command_overrides_remain_jarvis_subcommands(
     tmp_path: Path,
 ) -> None:

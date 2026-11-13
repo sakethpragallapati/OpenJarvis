@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 import yaml
+from tests._platform import needs_posix_shell
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,6 +27,7 @@ def test_stable_publication_waits_for_every_build_and_manifest():
     assert jobs["refresh-stable-channel"]["needs"] == ["publish-stable-release"]
 
 
+@needs_posix_shell
 def test_download_aliases_copy_the_verified_versioned_files(tmp_path):
     jobs = yaml.safe_load((ROOT / ".github/workflows/desktop.yml").read_text())["jobs"]
     script = next(

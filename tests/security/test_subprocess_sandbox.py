@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import os
-import shlex
+import sys
 import tempfile
 
-from openjarvis.core import get_python_executable
 from openjarvis.security.subprocess_sandbox import (
     build_safe_env,
     kill_process_tree,
@@ -34,6 +33,18 @@ class TestBuildSafeEnv:
             "TMPDIR",
             "TZ",
         }
+        if sys.platform == "win32":
+            # OS plumbing Windows children need to start (no secrets).
+            safe_keys |= {
+                "SYSTEMROOT",
+                "SYSTEMDRIVE",
+                "WINDIR",
+                "COMSPEC",
+                "PATHEXT",
+                "TEMP",
+                "TMP",
+                "USERPROFILE",
+            }
         for key in env:
             assert key in safe_keys
 
@@ -64,6 +75,11 @@ class TestBuildSafeEnv:
 # ---------------------------------------------------------------------------
 
 
+def _py(code: str) -> str:
+    """A shell command running ``code`` with Python (POSIX sh and cmd.exe)."""
+    return f'"{sys.executable}" -c "{code}"'
+
+
 class TestRunSandboxed:
     def test_simple_echo(self) -> None:
         result = run_sandboxed("echo hello", timeout=10.0)
@@ -73,22 +89,24 @@ class TestRunSandboxed:
         assert not result.killed
 
     def test_timeout_kills_process(self) -> None:
-        result = run_sandboxed("sleep 60", timeout=1.0)
+        result = run_sandboxed(_py("import time; time.sleep(60)"), timeout=1.0)
         assert result.timed_out
         assert result.killed
         assert result.returncode == -1
 
     def test_working_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = run_sandboxed("pwd", working_dir=tmpdir, timeout=10.0)
+            result = run_sandboxed(
+                _py("import os; print(os.getcwd())"), working_dir=tmpdir, timeout=10.0
+            )
             assert result.returncode == 0
-            assert tmpdir in result.stdout.strip()
+            assert os.path.samefile(tmpdir, result.stdout.strip())
 
     def test_env_isolation(self) -> None:
         os.environ["TEST_SECRET"] = "super_secret_value"
         try:
             result = run_sandboxed(
-                'echo "val=$TEST_SECRET"',
+                _py("import os; print('val=' + os.environ.get('TEST_SECRET', ''))"),
                 timeout=10.0,
             )
             assert result.returncode == 0
@@ -99,7 +117,7 @@ class TestRunSandboxed:
     def test_output_truncation(self) -> None:
         # Generate output larger than max_output_bytes
         result = run_sandboxed(
-            f"{shlex.quote(get_python_executable())} -c \"print('A' * 200)\"",
+            _py("print('A' * 200)"),
             timeout=10.0,
             max_output_bytes=50,
         )

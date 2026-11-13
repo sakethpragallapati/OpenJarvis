@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -69,12 +70,18 @@ def _detect_running_engines() -> list[str]:
 def _next_steps_text(engine: str, model: str = "") -> str:
     """Return engine-specific next-steps guidance after init."""
     pull_model = model or "qwen3.5:2b"
+    # The shell installer is Linux/macOS-only; Windows gets the winget package.
+    install_ollama = (
+        "winget install Ollama.Ollama"
+        if sys.platform == "win32"
+        else "curl -fsSL https://ollama.com/install.sh | sh"
+    )
     steps: dict[str, str] = {
         "ollama": (
             "Next steps:\n"
             "\n"
             "  1. Install and start Ollama:\n"
-            "     curl -fsSL https://ollama.com/install.sh | sh\n"
+            f"     {install_ollama}\n"
             "     ollama serve\n"
             "\n"
             f"  2. Pull a model:\n"

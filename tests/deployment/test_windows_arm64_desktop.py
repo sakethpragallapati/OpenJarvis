@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from tests._platform import needs_posix_shell
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "frontend/src-tauri/scripts"
@@ -71,6 +72,7 @@ def download(script, env, *args):
     )
 
 
+@needs_posix_shell
 @pytest.mark.parametrize("explicit_target", [True, False])
 def test_stages_arm64_runtime_even_from_emulated_git_bash(
     sidecar_download, explicit_target
@@ -88,6 +90,7 @@ def test_stages_arm64_runtime_even_from_emulated_git_bash(
     assert not (runtime / "ollama.exe").exists()
 
 
+@needs_posix_shell
 def test_rejects_arm64_archive_without_inference_runtime(sidecar_download):
     script, archive, env = sidecar_download
     with zipfile.ZipFile(archive, "w") as bundle:
@@ -98,6 +101,7 @@ def test_rejects_arm64_archive_without_inference_runtime(sidecar_download):
     assert not (script.parent.parent / "binaries" / f"ollama-{ARM_TARGET}.exe").exists()
 
 
+@needs_posix_shell
 def test_old_binary_only_cache_is_restaged(sidecar_download):
     script, _, env = sidecar_download
     binaries = script.parent.parent / "binaries"
@@ -112,6 +116,7 @@ def test_old_binary_only_cache_is_restaged(sidecar_download):
     ).is_file()
 
 
+@needs_posix_shell
 def test_explicit_x64_target_wins_over_arm_host(sidecar_download):
     script, _, env = sidecar_download
     result = download(script, env, "x86_64-pc-windows-msvc")

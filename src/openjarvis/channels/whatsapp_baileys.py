@@ -121,23 +121,36 @@ class WhatsAppBaileysChannel(BaseChannel):
                 shutil.rmtree(dist_dst)
             shutil.copytree(dist_src, dist_dst)
 
-        # Run npm install if node_modules is missing.
-        node_modules = runtime / "node_modules"
-        if not node_modules.exists():
-            logger.info("Running npm install in %s", runtime)
-            subprocess.run(
-                ["npm", "install", "--production"],
-                cwd=str(runtime),
-                check=True,
-                capture_output=True,
-            )
-
+        # Checked before npm install: installing dependencies for a bridge that
+        # was never compiled only downloads packages and then fails anyway.
         bridge_js = runtime / "dist" / "bridge.js"
         if not bridge_js.exists():
             raise RuntimeError(
                 f"Bridge entry point not found at {bridge_js}.  "
                 "Ensure the bridge TypeScript has been compiled."
             )
+
+        # Run npm install if node_modules is missing.
+        node_modules = runtime / "node_modules"
+        if not node_modules.exists():
+            # Resolve the full path: on Windows npm is npm.cmd, which
+            # CreateProcess cannot find from the bare name "npm".
+            npm = shutil.which("npm")
+            if npm is None:
+                raise RuntimeError(
+                    "npm was not found on PATH; it ships with Node.js 22+."
+                )
+            logger.info("Running npm install in %s", runtime)
+            try:
+                subprocess.run(
+                    [npm, "install", "--production"],
+                    cwd=str(runtime),
+                    check=True,
+                    capture_output=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                detail = (exc.stderr or b"").decode(errors="replace")[-500:]
+                raise RuntimeError(f"npm install failed: {detail}") from exc
         return bridge_js
 
     # -- BaseChannel interface ---------------------------------------------------

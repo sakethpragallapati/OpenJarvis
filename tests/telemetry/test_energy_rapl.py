@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -33,6 +34,10 @@ def _create_rapl_domain(
     max_energy_uj: int = 262143328850,
 ) -> Path:
     """Create a single RAPL domain directory with required files."""
+    if sys.platform == "win32" and ":" in dir_name:
+        # RAPL is a Linux sysfs interface; its directory names ("intel-rapl:0")
+        # are not valid on Windows filesystems.
+        pytest.skip("RAPL sysfs layout can't be reproduced on Windows")
     domain_dir = base / dir_name
     domain_dir.mkdir(parents=True, exist_ok=True)
     (domain_dir / "name").write_text(name)

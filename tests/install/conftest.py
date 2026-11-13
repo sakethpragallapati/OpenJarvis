@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -32,3 +33,13 @@ def tmp_openjarvis_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     # "pending"/"failed" to "ready" behind their backs.
     monkeypatch.setattr("openjarvis._rust_bridge.RUST_AVAILABLE", False)
     return home
+
+
+# Model marker files are named "<model>.<state>" with Ollama tags such as
+# "qwen3.5:9b". Only the POSIX pull-model.sh writes them; the native Windows
+# installer pulls models directly, and ':' is not a valid Windows filename
+# character (it would create an NTFS alternate data stream instead).
+needs_colon_filenames = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="model marker filenames contain ':', which Windows does not allow",
+)
