@@ -161,6 +161,17 @@ class OllamaEngine(AsyncHTTPEngineMixin, InferenceEngine):
         # Last stream usage — captured from Ollama's final chunk
         self._last_stream_usage: Dict[str, int] = {}
 
+    @property
+    def keep_alive(self) -> Any:
+        """Default keep_alive sent with every request ("" = Ollama's default)."""
+        return self._keep_alive
+
+    @keep_alive.setter
+    def keep_alive(self, value: Any) -> None:
+        # Set on the engine, not per call: agents only forward allowlisted
+        # engine options, so a per-call keep_alive would be dropped for them.
+        self._keep_alive = _normalize_keep_alive(value)
+
     def _apply_keep_alive(
         self, payload: Dict[str, Any], kwargs: Dict[str, Any]
     ) -> None:

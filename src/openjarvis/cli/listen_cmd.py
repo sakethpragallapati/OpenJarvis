@@ -95,7 +95,6 @@ def listen(
         return
 
     from openjarvis.cli._assistant import LISTEN_DEFAULT_AGENT, LISTEN_DEFAULT_TOOLS
-    from openjarvis.cli._tool_names import resolve_tool_names
     from openjarvis.cli.chat_cmd import chat
     from openjarvis.core.config import load_config
 
@@ -105,14 +104,10 @@ def listen(
         # get a chatty answer. Respect any other configured agent.
         agent_name = LISTEN_DEFAULT_AGENT
     if tools is None:
-        # Add the desktop tools to whatever the config enables (`jarvis init`
-        # always writes a list), so voice commands can operate the PC. An
-        # explicit --tools still wins.
-        configured = resolve_tool_names(None, config.tools.enabled, config.agent.tools)
-        merged = configured + [
-            name for name in LISTEN_DEFAULT_TOOLS.split(",") if name not in configured
-        ]
-        tools = ",".join(merged)
+        # The desktop set, not the chat config's list: every tool's schema is
+        # re-sent with each request, and code/shell/file tools add prompt
+        # tokens (= latency) without being useful by voice. --tools overrides.
+        tools = LISTEN_DEFAULT_TOOLS
 
     ctx.invoke(
         chat,

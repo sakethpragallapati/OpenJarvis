@@ -53,11 +53,58 @@ class VoiceSession:
         self._voice_prefs: tuple[str, str, float] | None = None
         self._voice_warned: set[str] = set()
         self._silence_threshold: int | None = None
+        self.last_stt_seconds = 0.0
 
     @property
     def silence_threshold(self) -> int | None:
         """Mic level that counts as speech; None = voice_io's fixed default."""
         return self._silence_threshold
+
+    def record_kwargs(self, **overrides: Any) -> dict[str, Any]:
+        """Keyword arguments for voice_io's recorders from this session."""
+        from openjarvis.core.config import load_config
+
+        config = self._config if self._config is not None else load_config()
+        kwargs: dict[str, Any] = {}
+        if self._silence_threshold is not None:
+            kwargs["silence_threshold"] = self._silence_threshold
+        end_silence = float(getattr(config.speech, "end_silence_seconds", 0) or 0)
+        if end_silence > 0:
+            kwargs["silence_seconds"] = end_silence
+        kwargs.update(overrides)
+        return kwargs
+
+    def warm_up(self) -> list[str]:
+        """Load speech-to-text and the voice now instead of on first use.
+
+        Loading Kokoro takes 10+ s and Whisper a few seconds; doing it lazily
+        made the first reply take that long to be heard. Returns problems.
+        """
+        problems: list[str] = []
+        try:
+            stt = self.get_stt_backend()
+            if stt is None:
+                problems.append("no speech-to-text backend")
+            else:
+                from openjarvis.speech.voice_io import _frames_to_wav
+
+                # A first decode initializes the CTranslate2 kernels too.
+                stt.transcribe(_frames_to_wav([bytes(3200)], 16000), format="wav")
+        except Exception as exc:
+            problems.append(f"speech-to-text: {exc}")
+        try:
+            tts = self.get_tts_backend()
+            if tts is None:
+                problems.append("no text-to-speech backend")
+            else:
+                voice_id, speed = self.voice_for_backend(tts)
+                kwargs: dict[str, Any] = {"output_format": "wav", "speed": speed}
+                if voice_id:
+                    kwargs["voice_id"] = voice_id
+                tts.synthesize("Ready.", **kwargs)
+        except Exception as exc:
+            problems.append(f"text-to-speech: {exc}")
+        return problems
 
     def calibrate_microphone(self, console: Any = None) -> int | None:
         """Pick the speech threshold for this session from the room's noise.
@@ -174,8 +221,18 @@ def read_voice_input(console: Any, session: VoiceSession) -> Optional[str] | obj
 def record_voice(
     console: Any,
     session: VoiceSession | None = None,
+    *,
+    audio: bytes | None = None,
+    follow_up_seconds: float | None = None,
 ) -> Optional[str] | object:
-    """Record from mic, transcribe, and return text or a loop sentinel."""
+    """Record from mic, transcribe, and return text or a loop sentinel.
+
+    ``audio`` transcribes an utterance already recorded (e.g. on the
+    wake-word stream). ``follow_up_seconds`` listens quietly for that long
+    and returns None without a message if nobody starts speaking.
+    """
+    import time
+
     from openjarvis.speech.voice_io import record_until_silence
 
     active_session = session or VoiceSession()
@@ -190,32 +247,45 @@ def record_voice(
         )
         return VOICE_EXIT
 
-    console.print("[dim cyan]Listening… (speak now, stops on silence)[/dim cyan]")
-    record_kwargs: dict[str, Any] = {}
-    if active_session.silence_threshold is not None:
-        record_kwargs["silence_threshold"] = active_session.silence_threshold
-    try:
-        audio_bytes = record_until_silence(**record_kwargs)
-    except KeyboardInterrupt:
-        return VOICE_EXIT
-    except Exception as exc:
-        # PortAudio failures are regular Exceptions (and can surface as
-        # OSError), so report them without letting terminal control sequences
-        # through. SystemExit deliberately continues to propagate, while
-        # Ctrl-C maps to the chat loop's graceful-exit sentinel above.
-        console.print(f"[red]Mic error: {_terminal_safe_text(exc)}[/red]")
-        return VOICE_EXIT
+    if audio is not None:
+        audio_bytes = audio
+    else:
+        if follow_up_seconds is None:
+            console.print(
+                "[dim cyan]Listening… (speak now, stops on silence)[/dim cyan]"
+            )
+            record_kwargs = active_session.record_kwargs()
+        else:
+            record_kwargs = active_session.record_kwargs(
+                startup_silence_seconds=follow_up_seconds, require_speech=True
+            )
+        try:
+            audio_bytes = record_until_silence(**record_kwargs)
+        except KeyboardInterrupt:
+            return VOICE_EXIT
+        except Exception as exc:
+            # PortAudio failures are regular Exceptions (and can surface as
+            # OSError), so report them without letting terminal control
+            # sequences through. SystemExit deliberately continues to
+            # propagate, while Ctrl-C maps to the chat loop's graceful exit.
+            console.print(f"[red]Mic error: {_terminal_safe_text(exc)}[/red]")
+            return VOICE_EXIT
+    if not audio_bytes:
+        return None  # nobody started speaking
 
     console.print("[dim]Transcribing…[/dim]")
+    started = time.perf_counter()
     try:
         result = backend.transcribe(
             audio_bytes, format="wav", language=active_session.get_stt_language()
         )
+        active_session.last_stt_seconds = time.perf_counter() - started
         text = result.text.strip()
         if text:
             console.print(f"[bold]You (voice):[/bold] {_terminal_safe_text(text)}")
             return text
-        console.print("[dim]Nothing heard — try again.[/dim]")
+        if follow_up_seconds is None:
+            console.print("[dim]Nothing heard — try again.[/dim]")
         return None
     except Exception as exc:
         console.print(f"[red]Transcription error: {_terminal_safe_text(exc)}[/red]")

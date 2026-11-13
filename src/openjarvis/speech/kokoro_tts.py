@@ -14,6 +14,7 @@ female (prefix ``z`` → ``lang_code="z"``).
 from __future__ import annotations
 
 import builtins
+import inspect
 import io
 import logging
 import sys
@@ -43,6 +44,19 @@ _VOICE_PREFIX_TO_LANG: Dict[str, str] = {
 }
 
 _DEFAULT_LANG_CODE = "a"
+# Passed explicitly: Kokoro otherwise prints "Defaulting repo_id" warnings.
+_KOKORO_REPO_ID = "hexgrad/Kokoro-82M"
+
+
+def _repo_kwargs(factory: Any) -> Dict[str, Any]:
+    """``{"repo_id": ...}`` if ``factory`` takes it (Kokoro >= 0.9 does)."""
+    try:
+        params = inspect.signature(factory).parameters
+    except (TypeError, ValueError):
+        return {}
+    return {"repo_id": _KOKORO_REPO_ID} if "repo_id" in params else {}
+
+
 _DEFAULT_VOICE_ID = "af_heart"
 _IMPORT_LOCK = threading.RLock()
 
@@ -167,7 +181,11 @@ class KokoroTTSBackend(TTSBackend):
             try:
                 # KModel is language-blind and is by far the heaviest part of
                 # Kokoro. Reuse one model across every language pipeline.
-                pipeline = KPipeline(lang_code=lang_code, model=self._ensure_model())
+                pipeline = KPipeline(
+                    lang_code=lang_code,
+                    model=self._ensure_model(),
+                    **_repo_kwargs(KPipeline),
+                )
             except ImportError as exc:
                 # Kokoro loads language-specific G2P resources at init time and
                 # several languages need extra dependencies that aren't pulled in
@@ -225,7 +243,9 @@ class KokoroTTSBackend(TTSBackend):
                 else:
                     device = "cpu"
 
-        model_kwargs = {"model": self._model_path} if self._model_path else {}
+        model_kwargs: Dict[str, Any] = _repo_kwargs(KModel)
+        if self._model_path:
+            model_kwargs["model"] = self._model_path
         try:
             self._model = KModel(**model_kwargs).to(device).eval()
         except RuntimeError as exc:

@@ -32,27 +32,22 @@ def _rms(data: bytes) -> float:
     return (sum(s * s for s in shorts) / n) ** 0.5
 
 
-def record_until_silence(
+def record_from_stream(
+    stream: object,
     *,
     sample_rate: int = _SAMPLE_RATE,
     silence_threshold: int = _SILENCE_THRESHOLD,
     silence_seconds: float = _SILENCE_SECONDS,
     startup_silence_seconds: float = _STARTUP_SILENCE_SECONDS,
     max_seconds: float = _MAX_RECORD_SECONDS,
+    require_speech: bool = False,
 ) -> bytes:
-    """Record from the default microphone until silence is detected.
+    """Record from an already-open 16-bit mono input stream until silence.
 
-    Returns raw WAV bytes (16-bit mono).
-    Raises RuntimeError if sounddevice is not installed.
+    Lets the wake-word listener hand over its open stream, so a command said
+    in the same breath as the wake word loses no audio to a stream reopen.
+    With ``require_speech`` an utterance that never starts returns ``b""``.
     """
-    try:
-        import sounddevice as sd
-    except ImportError:
-        raise RuntimeError(
-            "sounddevice is required for voice input. "
-            "Install with: pip install sounddevice"
-        )
-
     chunks_per_second = sample_rate / _CHUNK
     silence_chunks = int(silence_seconds * chunks_per_second)
     startup_silence_chunks = max(1, int(startup_silence_seconds * chunks_per_second))
@@ -62,29 +57,64 @@ def record_until_silence(
     silence_count = 0
     has_speech = False
 
+    for _ in range(max_chunks):
+        raw, _ = stream.read(_CHUNK)  # type: ignore[attr-defined]
+        data = bytes(raw)
+        frames.append(data)
+
+        amplitude = _rms(data)
+        if amplitude > silence_threshold:
+            has_speech = True
+            silence_count = 0
+        elif not has_speech and len(frames) >= startup_silence_chunks:
+            break
+        elif has_speech:
+            silence_count += 1
+            if silence_count >= silence_chunks:
+                break
+
+    if require_speech and not has_speech:
+        return b""
+    return _frames_to_wav(frames, sample_rate)
+
+
+def record_until_silence(
+    *,
+    sample_rate: int = _SAMPLE_RATE,
+    silence_threshold: int = _SILENCE_THRESHOLD,
+    silence_seconds: float = _SILENCE_SECONDS,
+    startup_silence_seconds: float = _STARTUP_SILENCE_SECONDS,
+    max_seconds: float = _MAX_RECORD_SECONDS,
+    require_speech: bool = False,
+) -> bytes:
+    """Record from the default microphone until silence is detected.
+
+    Returns raw WAV bytes (16-bit mono), or ``b""`` when ``require_speech``
+    is set and nobody spoke. Raises RuntimeError if sounddevice is missing.
+    """
+    try:
+        import sounddevice as sd
+    except ImportError:
+        raise RuntimeError(
+            "sounddevice is required for voice input. "
+            "Install with: pip install sounddevice"
+        )
+
     with sd.RawInputStream(
         samplerate=sample_rate,
         channels=_CHANNELS,
         dtype="int16",
         blocksize=_CHUNK,
     ) as stream:
-        for _ in range(max_chunks):
-            raw, _ = stream.read(_CHUNK)
-            data = bytes(raw)
-            frames.append(data)
-
-            amplitude = _rms(data)
-            if amplitude > silence_threshold:
-                has_speech = True
-                silence_count = 0
-            elif not has_speech and len(frames) >= startup_silence_chunks:
-                break
-            elif has_speech:
-                silence_count += 1
-                if silence_count >= silence_chunks:
-                    break
-
-    return _frames_to_wav(frames, sample_rate)
+        return record_from_stream(
+            stream,
+            sample_rate=sample_rate,
+            silence_threshold=silence_threshold,
+            silence_seconds=silence_seconds,
+            startup_silence_seconds=startup_silence_seconds,
+            max_seconds=max_seconds,
+            require_speech=require_speech,
+        )
 
 
 def threshold_from_noise(noise_rms: float) -> int:
@@ -211,8 +241,12 @@ def play_audio_file(path: str) -> None:
     sd.wait()
 
 
-def play_chime(sample_rate: int = 24000) -> None:
-    """Play a short rising two-tone cue meaning "I'm listening"."""
+def play_chime(sample_rate: int = 24000, *, blocking: bool = True) -> None:
+    """Play a short rising two-tone cue meaning "I'm listening".
+
+    ``blocking=False`` returns immediately, so recording can start while the
+    cue plays instead of 160 ms later.
+    """
     try:
         import numpy as np
         import sounddevice as sd
@@ -225,7 +259,8 @@ def play_chime(sample_rate: int = 24000) -> None:
         1.0, np.minimum(np.arange(tone.size), tone.size - np.arange(tone.size)) / 240
     )
     sd.play((0.2 * tone * fade).astype("float32"), sample_rate)
-    sd.wait()
+    if blocking:
+        sd.wait()
 
 
 def stop_playback() -> None:
@@ -241,6 +276,7 @@ __all__ = [
     "measure_noise_floor",
     "play_audio_file",
     "play_wav",
+    "record_from_stream",
     "record_until_silence",
     "stop_playback",
     "threshold_from_noise",

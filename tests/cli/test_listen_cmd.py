@@ -30,15 +30,14 @@ def test_listen_defaults_to_a_tool_agent_and_pc_tools() -> None:
     assert kwargs["skip_runtime_panel"] is True
 
 
-def test_listen_keeps_configured_agent_and_adds_desktop_tools() -> None:
+def test_listen_keeps_configured_agent_but_uses_the_voice_tool_set() -> None:
     config = JarvisConfig()
     config.agent.default_agent = "native_react"
-    config.tools.enabled = "calculator,web_search"
+    config.tools.enabled = "code_interpreter,shell_exec"
     _, kwargs = _run_listen([], config)
     assert kwargs["agent_name"] is None
-    tools = kwargs["tools"].split(",")
-    assert tools[:2] == ["calculator", "web_search"]
-    assert "pc_control" in tools and tools.count("calculator") == 1
+    # Chat tools would add prompt tokens (latency) on every voice turn.
+    assert kwargs["tools"] == _assistant.LISTEN_DEFAULT_TOOLS
 
 
 def test_explicit_tools_win() -> None:

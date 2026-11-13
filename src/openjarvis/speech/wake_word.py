@@ -93,11 +93,15 @@ class WakeWordDetector:
         *,
         should_abort: Optional[Callable[[], bool]] = None,
         threshold: Optional[float] = None,
-    ) -> bool:
+        then: Optional[Callable[[Any], Any]] = None,
+    ) -> Any:
         """Block until the wake word is heard (True) or ``should_abort()`` (False).
 
-        Opens its own input stream and closes it before returning, so the
-        caller can record the command on the same microphone right after.
+        Opens its own input stream and closes it before returning. With
+        ``then``, the still-open stream is handed to ``then(stream)`` right
+        after the wake word and its result is returned instead of True, so a
+        command said in the same breath ("Hey Jarvis, open Notepad") is
+        recorded without the gap of reopening the microphone.
         """
         try:
             import sounddevice as sd
@@ -122,7 +126,7 @@ class WakeWordDetector:
                 raw, _ = stream.read(FRAME_SAMPLES)
                 if self.score(bytes(raw)) >= limit:
                     self.reset()
-                    return True
+                    return True if then is None else then(stream)
 
 
 class BargeIn:

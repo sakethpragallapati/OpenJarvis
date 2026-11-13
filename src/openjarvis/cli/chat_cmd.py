@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from typing import List, Optional
 
 import click
@@ -129,6 +130,14 @@ def chat(
     config = load_config()
     bus = EventBus(record_history=False)
 
+    agent_template = config.agent.default_system_prompt or ""
+    if voice_mode:
+        from openjarvis.cli._assistant import voice_system_template
+
+        # Spoken replies: short, no Markdown. Also fewer tokens to generate
+        # and synthesize, which is most of a voice turn's latency.
+        agent_template = voice_system_template(agent_template)
+
     import dataclasses as _dc
 
     effective_mf = (
@@ -208,8 +217,10 @@ def chat(
         from openjarvis.cli._assistant import preload_model, voice_keep_alive
 
         keep_alive = voice_keep_alive(config)
-        if keep_alive:
-            engine_kwargs["keep_alive"] = keep_alive
+        if keep_alive and hasattr(engine, "keep_alive"):
+            # On the engine itself: agents drop per-call options that aren't
+            # allowlisted, which would silently lose keep_alive.
+            engine.keep_alive = keep_alive
         preload_model(engine, model, keep_alive)
 
     # Interactive chat is a first-class tool execution path. Apply the same
@@ -292,7 +303,7 @@ def chat(
                     from openjarvis.prompt.builder import SystemPromptBuilder
 
                     kwargs["prompt_builder"] = SystemPromptBuilder(
-                        agent_template=config.agent.default_system_prompt or "",
+                        agent_template=agent_template,
                         memory_files_config=effective_mf,
                         system_prompt_config=config.system_prompt,
                     )
@@ -334,6 +345,9 @@ def chat(
             console.print(f"[red]Wake word unavailable: {escape(str(exc))}[/red]")
             sys.exit(1)
     if voice_session is not None:
+        from openjarvis.cli._assistant import warm_up
+
+        warm_up(console, voice_session, agent)
         console.print("[dim]Measuring background noise — stay quiet a moment…[/dim]")
         voice_session.calibrate_microphone(console)
 
@@ -406,7 +420,7 @@ def chat(
         from openjarvis.prompt.builder import SystemPromptBuilder
 
         builder = SystemPromptBuilder(
-            agent_template=config.agent.default_system_prompt or "",
+            agent_template=agent_template,
             memory_files_config=effective_mf,
             system_prompt_config=config.system_prompt,
         )
@@ -418,6 +432,7 @@ def chat(
 
     # REPL loop
     skip_wake = False
+    follow_up_seconds = 0.0
     while True:
         for note in _notifications.diff(get_status()):
             console.print(f"[dim cyan]{note}[/dim cyan]")
@@ -433,8 +448,10 @@ def chat(
                     detector,
                     announcer,
                     skip_wake=skip_wake,
+                    follow_up_seconds=follow_up_seconds,
                 )
                 skip_wake = False
+                follow_up_seconds = 0.0
             else:
                 announcer.speak_pending(console, voice_session)
                 result = read_voice_input(console, voice_session)
@@ -537,6 +554,7 @@ def chat(
 
         # Generate response even when optional memory context is unavailable.
         try:
+            reply_started = time.perf_counter()
             if agent is not None:
                 from openjarvis.agents._stubs import AgentContext
 
@@ -562,9 +580,16 @@ def chat(
                     else str(result)
                 )
 
+            reply_seconds = time.perf_counter() - reply_started
             history.append(Message(role=Role.ASSISTANT, content=content))
             console.print()
             console.print(Markdown(content))
+            if voice_mode:
+                assert voice_session is not None
+                console.print(
+                    f"[dim](heard in {voice_session.last_stt_seconds:.1f}s · "
+                    f"replied in {reply_seconds:.1f}s)[/dim]"
+                )
             console.print()
             if voice_mode:
                 assert voice_session is not None
@@ -574,10 +599,15 @@ def chat(
                     # Saying the wake word mid-reply stops it and goes
                     # straight to recording the next request.
                     with BargeIn(detector) as barge:
-                        speak(content, console, voice_session, should_stop=barge.heard)
+                        finished = speak(
+                            content, console, voice_session, should_stop=barge.heard
+                        )
                     skip_wake = barge.heard()
                 else:
-                    speak(content, console, voice_session)
+                    finished = speak(content, console, voice_session)
+                if detector is not None and finished and not skip_wake:
+                    # Conversation mode: a follow-up needs no wake word.
+                    follow_up_seconds = float(config.speech.follow_up_seconds or 0)
 
             publish_completed_exchange(
                 bus,

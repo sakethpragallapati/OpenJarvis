@@ -35,8 +35,9 @@ jarvis listen --no-autostart
   `jarvis chat --wake` is the same loop as `jarvis listen` with chat's defaults.
 
 Things you can ask. `jarvis listen` uses the `orchestrator` agent (unless you
-configured another tool-using agent) and adds the tools below to the ones in
-your `[tools] enabled` list; `--tools a,b` replaces the whole set.
+configured another tool-using agent) with the desktop tools below, not your
+`[tools] enabled` chat list: every tool adds prompt tokens, and so latency, to
+each spoken request. `--tools a,b` picks the set yourself.
 
 | Say | Tool |
 |-----|------|
@@ -64,6 +65,8 @@ silence_threshold = 0      # 0 = measure room noise at start; or pin a mic level
 wake_word = "hey_jarvis"   # or "alexa", "hey_mycroft", or a path to a custom .onnx
 wake_word_threshold = 0.5  # raise if it wakes by itself, lower if it misses you
 wake_word_barge_in = true
+end_silence_seconds = 0.9  # pause that ends your sentence (0 = default 1.5 s)
+follow_up_seconds = 6      # after a reply, keep listening this long without the wake word
 
 [engine.ollama]
 keep_alive = "30m"         # keep the model loaded between commands ("-1" = forever)

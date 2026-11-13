@@ -1649,6 +1649,12 @@ class SpeechConfig:
     wake_word_threshold: float = 0.5
     # Saying the wake word while Jarvis is talking cuts the reply short.
     wake_word_barge_in: bool = True
+    # Pause that ends an utterance, in seconds. 0 = recorder default (1.5 s);
+    # ~0.8-1.0 feels snappier for short voice commands.
+    end_silence_seconds: float = 0.0
+    # After a spoken reply, listen this long for a follow-up without the
+    # wake word (`jarvis listen`). 0 = always require the wake word.
+    follow_up_seconds: float = 0.0
 
 
 @dataclass(slots=True)
