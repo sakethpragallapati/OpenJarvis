@@ -103,6 +103,22 @@ def _ollama_request_options(
     return options
 
 
+def _normalize_keep_alive(value: Any) -> Any:
+    """Map a config/env keep-alive to what Ollama accepts.
+
+    Ollama takes a duration string ("30m") or a number of seconds, where a
+    negative number keeps the model loaded forever. TOML and env values
+    arrive as strings, so numeric strings become ints.
+    """
+    if isinstance(value, str):
+        value = value.strip()
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    return value
+
+
 @EngineRegistry.register("ollama")
 class OllamaEngine(AsyncHTTPEngineMixin, InferenceEngine):
     """Ollama backend via its native HTTP API."""
@@ -120,12 +136,19 @@ class OllamaEngine(AsyncHTTPEngineMixin, InferenceEngine):
         host: str | None = None,
         *,
         timeout: float = 1800.0,
+        keep_alive: str | int | None = None,
     ) -> None:
         # Priority: explicit host (from config.toml) > OLLAMA_HOST env var > default
         if host is None:
             env_host = os.environ.get("OLLAMA_HOST")
             host = env_host or self._DEFAULT_HOST
         self._host = host.rstrip("/")
+        # Priority: explicit keep_alive (from config.toml) > env var > Ollama's
+        # own default (5 minutes). A voice assistant idles between commands,
+        # so the default unload makes the next command pay a cold load.
+        if keep_alive is None or keep_alive == "":
+            keep_alive = os.environ.get("JARVIS_OLLAMA_KEEP_ALIVE", "")
+        self._keep_alive = _normalize_keep_alive(keep_alive)
         # Used by the shared async streaming plumbing (AsyncHTTPEngineMixin) so a
         # wedged token read is bounded by ``timeout`` instead of hanging the
         # single event loop for the httpx default.
@@ -137,6 +160,31 @@ class OllamaEngine(AsyncHTTPEngineMixin, InferenceEngine):
         self._client = httpx.Client(base_url=self._host, timeout=timeout)
         # Last stream usage — captured from Ollama's final chunk
         self._last_stream_usage: Dict[str, int] = {}
+
+    def _apply_keep_alive(
+        self, payload: Dict[str, Any], kwargs: Dict[str, Any]
+    ) -> None:
+        keep_alive = _normalize_keep_alive(kwargs.get("keep_alive", self._keep_alive))
+        if keep_alive not in ("", None):
+            payload["keep_alive"] = keep_alive
+
+    def preload(self, model: str, *, keep_alive: str | int | None = None) -> bool:
+        """Load ``model`` into memory now so the first real request is fast.
+
+        An empty ``/api/generate`` request makes Ollama load the model and
+        hold it for ``keep_alive``. Returns False if Ollama is unreachable.
+        """
+        payload: Dict[str, Any] = {"model": model}
+        self._apply_keep_alive(
+            payload, {} if keep_alive is None else {"keep_alive": keep_alive}
+        )
+        try:
+            resp = self._client.post("/api/generate", json=payload)
+            resp.raise_for_status()
+        except (httpx.HTTPError, OSError) as exc:
+            logger.debug("Ollama preload of %s failed: %s", model, exc)
+            return False
+        return True
 
     def generate(
         self,
@@ -168,6 +216,7 @@ class OllamaEngine(AsyncHTTPEngineMixin, InferenceEngine):
                 kwargs=kwargs,
             ),
         }
+        self._apply_keep_alive(payload, kwargs)
         # Disable extended thinking by default (Qwen3.5 etc.).
         # When enabled, thinking tokens consume the entire budget and
         # the visible content comes back empty.
@@ -290,6 +339,7 @@ class OllamaEngine(AsyncHTTPEngineMixin, InferenceEngine):
                 kwargs=kwargs,
             ),
         }
+        self._apply_keep_alive(payload, kwargs)
         # Mirror generate()'s default: disable extended thinking unless the
         # caller opted in. Qwen3/etc. with thinking on can stall the visible
         # stream for 60+ seconds before any tokens reach the client, which

@@ -78,6 +78,16 @@ def _read_input(prompt: str = "You> ") -> Optional[str]:
     default=False,
     help="Enable voice I/O: mic input with silence detection + TTS response playback.",
 )
+@click.option(
+    "--wake",
+    "wake_mode",
+    is_flag=True,
+    default=False,
+    help=(
+        "Hands-free voice: wait for the wake word ('Hey Jarvis'), then listen. "
+        "Implies --voice. Needs the wakeword extra."
+    ),
+)
 @runtime_cli_options
 def chat(
     engine_key: str | None,
@@ -91,6 +101,7 @@ def chat(
     num_ctx: int | None,
     num_gpu: int | None,
     skip_runtime_panel: bool,
+    wake_mode: bool = False,
 ) -> None:
     """Start an interactive multi-turn chat session.
 
@@ -108,9 +119,12 @@ def chat(
       /history      — show conversation history
 
     Pass --voice to use microphone input (silence-detection) and hear responses
-    read back via text-to-speech (kokoro local or OpenAI TTS).
+    read back via text-to-speech (kokoro local or OpenAI TTS). Pass --wake for
+    hands-free use: say the wake word, then the request (``jarvis listen``).
     """
     console = Console(stderr=True)
+    if wake_mode:
+        voice_mode = True
 
     config = load_config()
     bus = EventBus(record_history=False)
@@ -163,6 +177,10 @@ def chat(
         console.print("[red]No model available.[/red]")
         sys.exit(1)
 
+    from openjarvis.cli._assistant import apply_power_policy
+
+    model = apply_power_policy(console, config, model, explicit_model=bool(model_name))
+
     from openjarvis.cli._runtime_panel import (
         ChatRuntimeOptions,
         interactive_pick_runtime_options,
@@ -185,6 +203,14 @@ def chat(
     else:
         runtime_opts = ChatRuntimeOptions()
     engine_kwargs = runtime_opts.to_engine_kwargs(engine_name=engine_name)
+
+    if voice_mode and engine_name == "ollama":
+        from openjarvis.cli._assistant import preload_model, voice_keep_alive
+
+        keep_alive = voice_keep_alive(config)
+        if keep_alive:
+            engine_kwargs["keep_alive"] = keep_alive
+        preload_model(engine, model, keep_alive)
 
     # Interactive chat is a first-class tool execution path. Apply the same
     # configured engine guardrails, RBAC, rate limiting, and audit bus as ask,
@@ -294,14 +320,42 @@ def chat(
     # Keep voice state outside the core chat path so picker/runtime changes can
     # be layered independently. Loaded speech models live for this session.
     voice_session = VoiceSession(config) if voice_mode else None
+    detector = None
+    if wake_mode:
+        from openjarvis.speech.wake_word import WakeWordDetector
+
+        try:
+            detector = WakeWordDetector(
+                config.speech.wake_word, config.speech.wake_word_threshold
+            )
+            console.print("[dim]Loading wake word model…[/dim]")
+            detector.load()
+        except Exception as exc:
+            console.print(f"[red]Wake word unavailable: {escape(str(exc))}[/red]")
+            sys.exit(1)
+    if voice_session is not None:
+        console.print("[dim]Measuring background noise — stay quiet a moment…[/dim]")
+        voice_session.calibrate_microphone(console)
+
+    from openjarvis.cli._assistant import ReminderAnnouncer
+
+    announcer = ReminderAnnouncer(console, speak_aloud=voice_mode).start()
 
     # Print banner
-    voice_hint = (
-        "  [magenta]Voice mode ON[/magenta] — type normally, or press Enter "
-        "to speak; silence stops recording.\n"
-        if voice_mode
-        else ""
-    )
+    if detector is not None:
+        voice_hint = (
+            f"  [magenta]Hands-free mode[/magenta] — say "
+            f"'{escape(detector.label)}', then your request. Press any key or "
+            "say the wake word to interrupt a reply; say 'stop listening' or "
+            "press Ctrl-C to quit.\n"
+        )
+    elif voice_mode:
+        voice_hint = (
+            "  [magenta]Voice mode ON[/magenta] — type normally, or press Enter "
+            "to speak; silence stops recording. Press any key to stop a reply.\n"
+        )
+    else:
+        voice_hint = ""
     console.print(
         f"[green bold]OpenJarvis Chat[/green bold]\n"
         f"  Engine: [cyan]{_safe_rich_label(engine_name)}[/cyan]  "
@@ -363,13 +417,27 @@ def chat(
         history.append(Message(role=Role.SYSTEM, content=system_prompt))
 
     # REPL loop
+    skip_wake = False
     while True:
         for note in _notifications.diff(get_status()):
             console.print(f"[dim cyan]{note}[/dim cyan]")
 
         if voice_mode:
             assert voice_session is not None
-            result = read_voice_input(console, voice_session)
+            if detector is not None:
+                from openjarvis.cli._assistant import wait_for_wake_command
+
+                result = wait_for_wake_command(
+                    console,
+                    voice_session,
+                    detector,
+                    announcer,
+                    skip_wake=skip_wake,
+                )
+                skip_wake = False
+            else:
+                announcer.speak_pending(console, voice_session)
+                result = read_voice_input(console, voice_session)
             if result is VOICE_EXIT:
                 console.print("\n[dim]Goodbye![/dim]")
                 break
@@ -500,7 +568,16 @@ def chat(
             console.print()
             if voice_mode:
                 assert voice_session is not None
-                speak(content, console, voice_session)
+                if detector is not None and config.speech.wake_word_barge_in:
+                    from openjarvis.speech.wake_word import BargeIn
+
+                    # Saying the wake word mid-reply stops it and goes
+                    # straight to recording the next request.
+                    with BargeIn(detector) as barge:
+                        speak(content, console, voice_session, should_stop=barge.heard)
+                    skip_wake = barge.heard()
+                else:
+                    speak(content, console, voice_session)
 
             publish_completed_exchange(
                 bus,
@@ -513,6 +590,7 @@ def chat(
         except Exception as exc:
             console.print(f"\n[red]Error: {exc}[/red]\n")
 
+    announcer.stop()
     if memory_service is not None:
         memory_service.stop()
 

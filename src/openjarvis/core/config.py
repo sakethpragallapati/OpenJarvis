@@ -369,6 +369,10 @@ class OllamaEngineConfig:
     """Per-engine config for Ollama."""
 
     host: str = ""
+    # How long Ollama keeps the model in memory after a request ("30m", "2h",
+    # "-1" = forever). Empty = Ollama's default (5 minutes), after which the
+    # next request pays a cold model load.
+    keep_alive: str = ""
 
 
 @dataclass(slots=True)
@@ -1636,6 +1640,27 @@ class SpeechConfig:
     tts_backend: str = "kokoro"  # "kokoro", "openai_tts", "cartesia", "elevenlabs"
     voice_id: str = "bm_george"
     voice_speed: float = 1.0
+    # Microphone level that counts as speech. 0 = measure the room's
+    # background noise when voice mode starts and derive it from that.
+    silence_threshold: int = 0
+    # Wake word for `jarvis listen`: an openWakeWord pre-trained model name
+    # ("hey_jarvis", "alexa", "hey_mycroft") or a path to a custom .onnx model.
+    wake_word: str = "hey_jarvis"
+    wake_word_threshold: float = 0.5
+    # Saying the wake word while Jarvis is talking cuts the reply short.
+    wake_word_barge_in: bool = True
+
+
+@dataclass(slots=True)
+class PowerConfig:
+    """Laptop power and GPU-memory behaviour for the voice assistant."""
+
+    # On battery, switch to ``battery_model`` and run speech-to-text on CPU.
+    battery_saver: bool = True
+    # Model to use while unplugged. Empty = keep the normal model.
+    battery_model: str = ""
+    # Warn when free GPU memory drops below this before loading models.
+    low_vram_warning_mb: int = 1024
 
 
 @dataclass(slots=True)
@@ -1792,6 +1817,7 @@ class JarvisConfig:
     a2a: A2AConfig = field(default_factory=A2AConfig)
     operators: OperatorsConfig = field(default_factory=OperatorsConfig)
     speech: SpeechConfig = field(default_factory=SpeechConfig)
+    power: PowerConfig = field(default_factory=PowerConfig)
     optimize: OptimizeConfig = field(default_factory=OptimizeConfig)
     agent_manager: AgentManagerConfig = field(default_factory=AgentManagerConfig)
     memory_files: MemoryFilesConfig = field(default_factory=MemoryFilesConfig)
@@ -2122,6 +2148,7 @@ def load_config(path: Optional[Path] = None) -> JarvisConfig:
             "a2a",
             "operators",
             "speech",
+            "power",
             "optimize",
             "agent_manager",
             "digest",

@@ -101,6 +101,7 @@ class TestChatCommand:
             patch("openjarvis.engine.get_engine", return_value=("mock", engine)),
             patch("openjarvis.intelligence.register_builtin_models"),
             patch("openjarvis.cli._voice_chat.record_voice") as record_voice,
+            patch("openjarvis.speech.voice_io.measure_noise_floor", return_value=1.0),
         ):
             result = CliRunner().invoke(
                 chat,
@@ -131,6 +132,7 @@ class TestChatCommand:
                 "openjarvis.speech.voice_io.record_until_silence",
                 side_effect=KeyboardInterrupt,
             ),
+            patch("openjarvis.speech.voice_io.measure_noise_floor", return_value=1.0),
         ):
             result = CliRunner().invoke(
                 chat,
@@ -172,7 +174,8 @@ class TestVoiceInput:
             assert record_voice(console) is VOICE_EXIT
 
         record.assert_not_called()
-        assert "OpenJarvis[speech]" in str(console.print.call_args)
+        # [speech] alone installs speech-to-text but no voice to answer with.
+        assert "OpenJarvis[speech,voice]" in str(console.print.call_args)
 
     def test_stt_backend_is_cached_for_the_chat_session(self) -> None:
         backend = MagicMock()

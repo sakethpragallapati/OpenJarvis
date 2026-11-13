@@ -185,6 +185,13 @@ speech = [
     "soundfile>=0.12",
 ]
 speech-deepgram = ["deepgram-sdk>=3.0"]
+# "Hey Jarvis" wake word for `jarvis listen`. openWakeWord runs its ONNX
+# models on CPU; tflite-runtime is only pulled on Linux by its own markers.
+wakeword = [
+    "openwakeword>=0.6",
+    "numpy>=1.24",
+    "sounddevice>=0.5",
+]
 eval-wandb = ["wandb>=0.17"]
 eval-sheets = ["gspread>=6.0", "google-auth>=2.0"]
 mining-pearl-cpu = [
@@ -303,6 +310,8 @@ select = ["E", "F", "I", "W"]
 # research_loop.py carries long prompt strings too (documented in CLAUDE.md);
 # the ignore was missing here.
 "src/openjarvis/agents/research_loop.py" = ["E501"]
+# Embedded PowerShell (WinRT type literals can't be wrapped).
+"src/openjarvis/pc/notify.py" = ["E501"]
 
 [dependency-groups]
 dev = [

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import io
+import time
 import wave
+from typing import Callable, Optional
 
 _SAMPLE_RATE = 16000
 _CHANNELS = 1
@@ -12,6 +14,11 @@ _SILENCE_THRESHOLD = 500  # RMS below this → silence
 _SILENCE_SECONDS = 1.5  # seconds of silence before auto-stop
 _STARTUP_SILENCE_SECONDS = 5.0  # give up early if speech never begins
 _MAX_RECORD_SECONDS = 30  # safety ceiling
+_CALIBRATION_SECONDS = 0.6
+# Speech must be this many times louder than the room's background hiss.
+_NOISE_MULTIPLIER = 3.0
+_MIN_THRESHOLD = 200  # quiet room + sensitive mic
+_MAX_THRESHOLD = 4000  # fan / cafe noise; above this we'd miss normal speech
 
 
 def _rms(data: bytes) -> float:
@@ -80,6 +87,47 @@ def record_until_silence(
     return _frames_to_wav(frames, sample_rate)
 
 
+def threshold_from_noise(noise_rms: float) -> int:
+    """Turn a measured background RMS into a speech/silence threshold."""
+    return int(min(max(noise_rms * _NOISE_MULTIPLIER, _MIN_THRESHOLD), _MAX_THRESHOLD))
+
+
+def measure_noise_floor(
+    *,
+    seconds: float = _CALIBRATION_SECONDS,
+    sample_rate: int = _SAMPLE_RATE,
+) -> float:
+    """Return the median RMS of the room's background noise.
+
+    The fixed ``_SILENCE_THRESHOLD`` suits one microphone. On a quiet laptop
+    mic it can cut the speaker off; next to a fan it never detects silence
+    and records the full 30 s. Callers measure once per session, before the
+    user speaks, and feed :func:`threshold_from_noise` into
+    :func:`record_until_silence`.
+    """
+    try:
+        import sounddevice as sd
+    except ImportError:
+        raise RuntimeError(
+            "sounddevice is required for voice input. "
+            "Install with: pip install sounddevice"
+        )
+
+    chunks = max(1, int(seconds * sample_rate / _CHUNK))
+    levels: list[float] = []
+    with sd.RawInputStream(
+        samplerate=sample_rate,
+        channels=_CHANNELS,
+        dtype="int16",
+        blocksize=_CHUNK,
+    ) as stream:
+        for _ in range(chunks):
+            raw, _ = stream.read(_CHUNK)
+            levels.append(_rms(bytes(raw)))
+    levels.sort()
+    return levels[len(levels) // 2]
+
+
 def _frames_to_wav(frames: list[bytes], sample_rate: int) -> bytes:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
@@ -90,11 +138,19 @@ def _frames_to_wav(frames: list[bytes], sample_rate: int) -> bytes:
     return buf.getvalue()
 
 
-def play_wav(audio: bytes, sample_rate: int = 24000) -> None:
+def play_wav(
+    audio: bytes,
+    sample_rate: int = 24000,
+    *,
+    should_stop: Optional[Callable[[], bool]] = None,
+) -> bool:
     """Play raw WAV bytes through the default output device.
 
     If the bytes are a valid WAV file, sample rate is read from the header;
     otherwise ``sample_rate`` is used as a fallback.
+
+    When ``should_stop`` is given it is polled while audio plays, and a True
+    result stops playback at once. Returns False if playback was stopped.
     """
     try:
         import numpy as np
@@ -120,7 +176,72 @@ def play_wav(audio: bytes, sample_rate: int = 24000) -> None:
         sr = sample_rate
 
     sd.play(data, sr)
+    if should_stop is None:
+        sd.wait()
+        return True
+
+    deadline = time.monotonic() + len(data) / float(sr)
+    while time.monotonic() < deadline:
+        if should_stop():
+            sd.stop()
+            return False
+        time.sleep(0.05)
+    sd.wait()
+    return True
+
+
+def play_audio_file(path: str) -> None:
+    """Decode an audio file (wav/flac/ogg/mp3) and play it on the default device.
+
+    Unlike :func:`play_wav` there is no raw-PCM fallback: an undecodable file
+    raises instead of being played back as noise, so callers can fall back to
+    an external player.
+    """
+    try:
+        import sounddevice as sd
+        import soundfile as sf
+    except ImportError:
+        raise RuntimeError(
+            "sounddevice and soundfile are required for audio playback. "
+            "Install with: pip install sounddevice soundfile"
+        )
+
+    data, sr = sf.read(path, dtype="float32")
+    sd.play(data, sr)
     sd.wait()
 
 
-__all__ = ["play_wav", "record_until_silence"]
+def play_chime(sample_rate: int = 24000) -> None:
+    """Play a short rising two-tone cue meaning "I'm listening"."""
+    try:
+        import numpy as np
+        import sounddevice as sd
+    except ImportError:
+        return
+    tone_len = int(sample_rate * 0.08)
+    t = np.arange(tone_len) / sample_rate
+    tone = np.concatenate([np.sin(2 * np.pi * 660 * t), np.sin(2 * np.pi * 880 * t)])
+    fade = np.minimum(
+        1.0, np.minimum(np.arange(tone.size), tone.size - np.arange(tone.size)) / 240
+    )
+    sd.play((0.2 * tone * fade).astype("float32"), sample_rate)
+    sd.wait()
+
+
+def stop_playback() -> None:
+    """Stop any audio started by :func:`play_wav` or :func:`play_audio_file`."""
+    try:
+        import sounddevice as sd
+    except ImportError:
+        return
+    sd.stop()
+
+
+__all__ = [
+    "measure_noise_floor",
+    "play_audio_file",
+    "play_wav",
+    "record_until_silence",
+    "stop_playback",
+    "threshold_from_noise",
+]

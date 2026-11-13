@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+import queue
+import re
+import sys
+import threading
+from typing import Any, Callable, Optional
 
 from rich.markup import escape
 
 VOICE_EXIT = object()
+_SYNTH_DONE = object()
+_NO_TTS_BACKEND = object()
 
 # Backend selection is shared with the API server and lives in
 # openjarvis.speech._tts_discovery. Importing that at module level would pull
@@ -46,6 +52,45 @@ class VoiceSession:
         self._tts_attempted: set[str] = set()
         self._voice_prefs: tuple[str, str, float] | None = None
         self._voice_warned: set[str] = set()
+        self._silence_threshold: int | None = None
+
+    @property
+    def silence_threshold(self) -> int | None:
+        """Mic level that counts as speech; None = voice_io's fixed default."""
+        return self._silence_threshold
+
+    def calibrate_microphone(self, console: Any = None) -> int | None:
+        """Pick the speech threshold for this session from the room's noise.
+
+        ``speech.silence_threshold`` > 0 pins it; otherwise the background
+        level is measured once, while nobody is talking yet.
+        """
+        from openjarvis.core.config import load_config
+
+        config = self._config if self._config is not None else load_config()
+        fixed = int(getattr(config.speech, "silence_threshold", 0) or 0)
+        if fixed > 0:
+            self._silence_threshold = fixed
+            return fixed
+
+        from openjarvis.speech.voice_io import measure_noise_floor, threshold_from_noise
+
+        try:
+            noise = measure_noise_floor()
+        except Exception as exc:
+            if console is not None:
+                console.print(
+                    "[dim yellow]Mic calibration skipped: "
+                    f"{_terminal_safe_text(exc)}[/dim yellow]"
+                )
+            return None
+        self._silence_threshold = threshold_from_noise(noise)
+        if console is not None:
+            console.print(
+                f"[dim]Mic calibrated (background {noise:.0f}, "
+                f"speech threshold {self._silence_threshold}).[/dim]"
+            )
+        return self._silence_threshold
 
     def get_stt_backend(self) -> Any:
         """Resolve and health-check STT once, then reuse the loaded backend."""
@@ -139,14 +184,18 @@ def record_voice(
         console.print(
             "[red]No speech-to-text backend available. "
             "Install the voice dependencies with: "
-            "pip install 'OpenJarvis[speech]', or configure a healthy "
-            "OpenAI/Deepgram backend.[/red]"
+            "pip install 'OpenJarvis[speech,voice]' "
+            "(or: uv sync --extra speech --extra voice), or configure a "
+            "healthy OpenAI/Deepgram backend.[/red]"
         )
         return VOICE_EXIT
 
     console.print("[dim cyan]Listening… (speak now, stops on silence)[/dim cyan]")
+    record_kwargs: dict[str, Any] = {}
+    if active_session.silence_threshold is not None:
+        record_kwargs["silence_threshold"] = active_session.silence_threshold
     try:
-        audio_bytes = record_until_silence()
+        audio_bytes = record_until_silence(**record_kwargs)
     except KeyboardInterrupt:
         return VOICE_EXIT
     except Exception as exc:
@@ -173,9 +222,99 @@ def record_voice(
         return None
 
 
-def speak(text: str, console: Any, session: VoiceSession | None = None) -> None:
-    """Synthesize and play text, reusing a healthy backend for the session."""
-    from openjarvis.speech.voice_io import play_wav
+_CODE_BLOCK = re.compile(r"```.*?(?:```|$)", re.DOTALL)
+_INLINE_CODE = re.compile(r"`([^`]*)`")
+_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_BARE_URL = re.compile(r"https?://\S+")
+_LINE_MARKER = re.compile(
+    r"^\s{0,3}(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s?)", re.MULTILINE
+)
+_EMPHASIS = re.compile(r"(\*\*|__|\*|~~)")
+_SENTENCE_END = re.compile(r"(?<=[.!?…])\s+|\n+")
+# Later chunks are merged up to this size: fewer, longer synth calls sound
+# more natural, while the first chunk stays short so playback starts fast.
+_MIN_CHUNK_CHARS = 80
+
+
+def speakable_text(text: str) -> str:
+    """Strip Markdown so TTS doesn't read out symbols, code or URLs."""
+    text = _CODE_BLOCK.sub(" (code shown on screen) ", text)
+    text = _INLINE_CODE.sub(r"\1", text)
+    text = _MD_LINK.sub(r"\1", text)
+    text = _BARE_URL.sub("link", text)
+    text = _LINE_MARKER.sub("", text)
+    text = _EMPHASIS.sub("", text)
+    text = text.replace("|", ", ")
+    lines = (" ".join(line.split()) for line in text.splitlines())
+    return "\n".join(line for line in lines if line)
+
+
+def split_for_speech(text: str) -> list[str]:
+    """Split text into sentence chunks for pipelined synthesis."""
+    pieces = [p.strip() for p in _SENTENCE_END.split(text) if p and p.strip()]
+    chunks: list[str] = []
+    for piece in pieces:
+        if len(chunks) > 1 and len(chunks[-1]) < _MIN_CHUNK_CHARS:
+            chunks[-1] = f"{chunks[-1]} {piece}"
+        else:
+            chunks.append(piece)
+    return chunks
+
+
+def _key_pressed() -> bool:
+    """True if a key was pressed in the console (Windows only; drains input)."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import msvcrt
+    except ImportError:
+        return False
+    if not sys.stdin.isatty():
+        return False
+    pressed = False
+    while msvcrt.kbhit():  # type: ignore[attr-defined]
+        msvcrt.getwch()  # type: ignore[attr-defined]
+        pressed = True
+    return pressed
+
+
+def _synthesize_chunk(
+    chunk: str, console: Any, session: VoiceSession
+) -> tuple[bytes, int] | None:
+    """Synthesize one chunk, falling through unhealthy backends once each."""
+    while (backend := session.get_tts_backend()) is not None:
+        try:
+            voice_id, speed = session.voice_for_backend(backend, console)
+            synth_kwargs: dict[str, Any] = {"output_format": "wav", "speed": speed}
+            if voice_id:
+                synth_kwargs["voice_id"] = voice_id
+            result = backend.synthesize(chunk, **synth_kwargs)
+            return result.audio, result.sample_rate
+        except Exception as exc:
+            console.print(
+                f"[dim yellow]Voice backend "
+                f"{getattr(backend, 'backend_id', '?')!r} failed: "
+                f"{_terminal_safe_text(exc)}[/dim yellow]"
+            )
+            session.discard_tts_backend()
+    return None
+
+
+def speak(
+    text: str,
+    console: Any,
+    session: VoiceSession | None = None,
+    *,
+    should_stop: Optional[Callable[[], bool]] = None,
+) -> bool:
+    """Speak ``text``, starting as soon as the first sentence is synthesized.
+
+    Sentences are synthesized on a worker thread while earlier ones play, so
+    a long reply no longer waits for the whole text to be converted. Ctrl-C,
+    any key (Windows console), or ``should_stop()`` returning True cuts the
+    reply short. Returns False when playback was interrupted.
+    """
+    from openjarvis.speech import voice_io
 
     active_session = session or VoiceSession()
 
@@ -185,30 +324,90 @@ def speak(text: str, console: Any, session: VoiceSession | None = None) -> None:
         active_session.get_voice_preferences()
     except Exception as exc:
         console.print(f"[red]Invalid speech config: {_terminal_safe_text(exc)}[/red]")
-        return
+        return True
 
-    while (backend := active_session.get_tts_backend()) is not None:
+    chunks = split_for_speech(speakable_text(text))
+    if not chunks:
+        return True
+
+    stop = threading.Event()
+
+    def stop_requested() -> bool:
+        if not stop.is_set() and (
+            _key_pressed() or (should_stop is not None and should_stop())
+        ):
+            stop.set()
+        return stop.is_set()
+
+    audio_queue: queue.Queue[object] = queue.Queue(maxsize=2)
+
+    def put(item: object) -> None:
+        while not stop.is_set():
+            try:
+                audio_queue.put(item, timeout=0.1)
+                return
+            except queue.Full:
+                continue
+
+    def produce() -> None:
         try:
-            voice_id, speed = active_session.voice_for_backend(backend, console)
-            synth_kwargs: dict[str, Any] = {"output_format": "wav", "speed": speed}
-            if voice_id:
-                synth_kwargs["voice_id"] = voice_id
-            result = backend.synthesize(text, **synth_kwargs)
-            if result.audio:
-                play_wav(result.audio, sample_rate=result.sample_rate)
-            return
-        except Exception as exc:
-            console.print(
-                f"[dim yellow]Voice backend "
-                f"{getattr(backend, 'backend_id', '?')!r} failed: "
-                f"{_terminal_safe_text(exc)}[/dim yellow]"
+            for chunk in chunks:
+                if stop.is_set():
+                    return
+                audio = _synthesize_chunk(chunk, console, active_session)
+                if audio is None:
+                    put(_NO_TTS_BACKEND)
+                    return
+                put(audio)
+        finally:
+            put(_SYNTH_DONE)
+
+    worker = threading.Thread(target=produce, name="openjarvis-tts", daemon=True)
+    worker.start()
+    interrupted = False
+    try:
+        while True:
+            try:
+                item = audio_queue.get(timeout=0.1)
+            except queue.Empty:
+                if stop_requested():
+                    interrupted = True
+                    break
+                continue
+            if item is _SYNTH_DONE:
+                break
+            if item is _NO_TTS_BACKEND:
+                console.print(
+                    "[dim yellow]No TTS backend available — install kokoro: "
+                    "uv sync --extra voice[/dim yellow]"
+                )
+                break
+            audio, sample_rate = item  # type: ignore[misc]
+            if not audio:
+                continue
+            finished = voice_io.play_wav(
+                audio, sample_rate=sample_rate, should_stop=stop_requested
             )
-            active_session.discard_tts_backend()
+            if finished is False:
+                interrupted = True
+                break
+    except KeyboardInterrupt:
+        voice_io.stop_playback()
+        interrupted = True
+    finally:
+        stop.set()
+        worker.join(timeout=2.0)
+    if interrupted:
+        console.print("[dim]Stopped speaking.[/dim]")
+    return not interrupted
 
-    console.print(
-        "[dim yellow]No TTS backend available — install kokoro: "
-        "pip install kokoro[/dim yellow]"
-    )
 
-
-__all__ = ["VOICE_EXIT", "VoiceSession", "read_voice_input", "record_voice", "speak"]
+__all__ = [
+    "VOICE_EXIT",
+    "VoiceSession",
+    "read_voice_input",
+    "record_voice",
+    "speak",
+    "speakable_text",
+    "split_for_speech",
+]

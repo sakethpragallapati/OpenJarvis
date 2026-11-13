@@ -2,20 +2,41 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
+import sys
 import threading
-from typing import Optional
+from typing import Any, Optional
 
 import click
 from rich.console import Console
 from rich.markdown import Markdown
 
-from openjarvis.agents.digest_store import DigestStore
 from openjarvis.core.config import DEFAULT_CONFIG_PATH, load_config
+
+logger = logging.getLogger(__name__)
+
+
+def _has_audio(artifact: Any) -> bool:
+    """Return True only when the digest points at a real audio file.
+
+    A failed TTS step stores ``Path("")``, which renders as ``"."`` and
+    ``exists()`` because it is the current directory (#1211).
+    """
+    path = artifact.audio_path
+    return bool(path.name) and path.is_file()
 
 
 def _play_audio(audio_path: str) -> None:
-    """Play audio file in background using available system player."""
+    """Play an audio file, in-process first so native Windows needs no player."""
+    try:
+        from openjarvis.speech.voice_io import play_audio_file
+
+        play_audio_file(audio_path)
+        return
+    except Exception as exc:
+        logger.debug("In-process playback failed for %s: %s", audio_path, exc)
+
     players = ["ffplay -nodisp -autoexit", "aplay", "afplay", "paplay"]
     for player in players:
         cmd_parts = player.split() + [audio_path]
@@ -29,6 +50,37 @@ def _play_audio(audio_path: str) -> None:
             return
         except (FileNotFoundError, subprocess.CalledProcessError):
             continue
+
+    if sys.platform == "win32":
+        # Last resort: the shell's default handler (e.g. Media Player).
+        import os
+
+        try:
+            os.startfile(audio_path)  # type: ignore[attr-defined]
+        except OSError as exc:
+            logger.debug("os.startfile failed for %s: %s", audio_path, exc)
+
+
+def _start_playback(audio_path: str) -> threading.Thread:
+    thread = threading.Thread(target=_play_audio, args=(audio_path,), daemon=True)
+    thread.start()
+    return thread
+
+
+def _wait_for_playback(thread: threading.Thread, console: Console) -> None:
+    """Keep the process alive until playback ends; Ctrl-C stops it early.
+
+    The playback thread is a daemon, so returning from the command would
+    otherwise cut the audio off the moment the text finished rendering.
+    """
+    try:
+        while thread.is_alive():
+            thread.join(0.2)
+    except KeyboardInterrupt:
+        from openjarvis.speech.voice_io import stop_playback
+
+        stop_playback()
+        console.print("[dim]Playback stopped.[/dim]")
 
 
 def _save_digest_schedule(enabled: bool, cron: str) -> None:
@@ -162,6 +214,10 @@ def digest(
         _handle_schedule(console, schedule)
         return
 
+    # Imported here: openjarvis.agents loads every agent (and the OpenAI SDK),
+    # which would add seconds to every `jarvis` command at CLI import time.
+    from openjarvis.agents.digest_store import DigestStore
+
     store = DigestStore(db_path=db_path) if db_path else DigestStore()
 
     if history:
@@ -201,22 +257,25 @@ def digest(
             store.close()
             return
 
-        audio_path = str(artifact.audio_path)
-        console.print(f"[dim]Audio path: '{audio_path}'[/dim]")
-        has_audio = bool(audio_path) and artifact.audio_path.exists()
-        console.print(f"[dim]Audio available: {has_audio}[/dim]")
+        has_audio = _has_audio(artifact)
         if has_audio:
-            audio_thread = threading.Thread(
-                target=_play_audio, args=(audio_path,), daemon=True
-            )
-            audio_thread.start()
-            console.print("[dim]Playing audio...[/dim]")
+            console.print(f"[dim]Audio path: '{artifact.audio_path}'[/dim]")
+        console.print(f"[dim]Audio available: {has_audio}[/dim]")
+        audio_thread = None
+        if has_audio:
+            audio_thread = _start_playback(str(artifact.audio_path))
+            console.print("[dim]Playing audio... (Ctrl-C to stop)[/dim]")
         else:
             console.print("[yellow]Audio unavailable — TTS failed.[/yellow]")
-            console.print("[yellow]Check OPENAI_API_KEY is set.[/yellow]")
+            console.print(
+                "[yellow]Install local TTS with 'uv sync --extra voice' "
+                "(Kokoro), or set OPENAI_API_KEY / ELEVENLABS_API_KEY.[/yellow]"
+            )
 
         console.print(Markdown(artifact.text))
         store.close()
+        if audio_thread is not None:
+            _wait_for_playback(audio_thread, console)
         return
 
     # Try to load today's cached digest
@@ -246,15 +305,14 @@ def digest(
         text = "\n".join(section_lines) if section_lines else text
 
     # Play audio in background while text renders
-    audio_path = str(artifact.audio_path)
-    if not text_only and audio_path and artifact.audio_path.exists():
-        audio_thread = threading.Thread(
-            target=_play_audio, args=(audio_path,), daemon=True
-        )
-        audio_thread.start()
+    audio_thread = None
+    if not text_only and _has_audio(artifact):
+        audio_thread = _start_playback(str(artifact.audio_path))
 
     console.print(Markdown(text))
     store.close()
+    if audio_thread is not None:
+        _wait_for_playback(audio_thread, console)
 
 
 def _handle_schedule(console: Console, schedule: str) -> None:

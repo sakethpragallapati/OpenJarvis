@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -16,6 +17,19 @@ from openjarvis.cli.digest_cmd import (
     _save_digest_schedule,
 )
 from openjarvis.core.config import load_config
+
+_AUDIO_MEDIA_TYPES = {
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".flac": "audio/flac",
+}
+
+
+def _audio_file_available(path: Path) -> bool:
+    # A failed TTS step stores Path(""), which is "." and therefore exists().
+    return bool(path.name) and path.is_file()
 
 
 class ScheduleUpdate(BaseModel):
@@ -51,9 +65,7 @@ def create_digest_router(*, db_path: str = "") -> APIRouter:
             "generated_at": artifact.generated_at.isoformat(),
             "model_used": artifact.model_used,
             "voice_used": artifact.voice_used,
-            "audio_available": (
-                artifact.audio_path.exists() if artifact.audio_path.name else False
-            ),
+            "audio_available": _audio_file_available(artifact.audio_path),
         }
 
     @router.get("/audio")
@@ -62,12 +74,13 @@ def create_digest_router(*, db_path: str = "") -> APIRouter:
         artifact = store.get_today()
         if artifact is None:
             raise HTTPException(status_code=404, detail="No digest for today")
-        if not artifact.audio_path.exists():
+        if not _audio_file_available(artifact.audio_path):
             raise HTTPException(status_code=404, detail="Audio not available")
+        suffix = artifact.audio_path.suffix.lower() or ".mp3"
         return FileResponse(
             str(artifact.audio_path),
-            media_type="audio/mpeg",
-            filename="digest.mp3",
+            media_type=_AUDIO_MEDIA_TYPES.get(suffix, "application/octet-stream"),
+            filename=f"digest{suffix}",
         )
 
     @router.post("/generate")

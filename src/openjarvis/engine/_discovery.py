@@ -63,6 +63,16 @@ def _make_engine(key: str, config: JarvisConfig) -> InferenceEngine:
             sampling=cfg.sampling,
         )
 
+    # ollama: host plus how long the model stays loaded between requests
+    if key == "ollama":
+        cfg = config.engine.ollama
+        ollama_kwargs: Dict[str, str] = {}
+        if cfg.host:
+            ollama_kwargs["host"] = cfg.host
+        if cfg.keep_alive:
+            ollama_kwargs["keep_alive"] = cfg.keep_alive
+        return cls(**ollama_kwargs)
+
     host_attr = _HOST_MAP.get(key)
     if host_attr is not None:
         host = getattr(config.engine, host_attr, None)

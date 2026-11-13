@@ -10,17 +10,31 @@ from typing import List, Optional
 from openjarvis.core.registry import SpeechRegistry
 from openjarvis.speech._stubs import Segment, SpeechBackend, TranscriptionResult
 
+logger = logging.getLogger(__name__)
+
+# On Windows, CTranslate2 loads its bundled DLLs at import time, so a broken
+# install (or a path over MAX_PATH) raises OSError rather than ImportError.
+# Treat both as "backend unavailable" instead of breaking every speech import.
 try:
     from faster_whisper import WhisperModel
-except ImportError:
+except (ImportError, OSError) as _exc:
+    logger.debug("faster-whisper unavailable: %s", _exc)
     WhisperModel = None  # type: ignore[assignment, misc]
 
 try:
     import ctranslate2
-except ImportError:
+except (ImportError, OSError):
     ctranslate2 = None  # type: ignore[assignment]
 
-logger = logging.getLogger(__name__)
+# Substrings of CUDA runtime failures (missing cuDNN/cuBLAS DLLs, driver too
+# old, no device) that mean "this GPU path cannot work here" -- as opposed to
+# a bad audio file, which the CPU would reject just the same.
+_GPU_ERROR_MARKERS = ("cuda", "cudnn", "cublas", "gpu", ".dll", "library")
+
+
+def _is_gpu_runtime_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in _GPU_ERROR_MARKERS)
 
 
 @SpeechRegistry.register("faster-whisper")
@@ -86,14 +100,40 @@ class FasterWhisperBackend(SpeechBackend):
                     "Install with: uv sync --extra desktop"
                 )
                 raise ImportError(self._last_error)
-            compute_type = self._resolve_compute_type()
-            self._model = WhisperModel(
-                self._model_size,
-                device=self._device,
-                compute_type=compute_type,
-            )
+            try:
+                self._model = self._load_model()
+            except Exception as exc:
+                if not self._switch_to_cpu(exc):
+                    raise
+                self._model = self._load_model()
         self._last_error = None
         return self._model
+
+    def _load_model(self) -> WhisperModel:
+        return WhisperModel(
+            self._model_size,
+            device=self._device,
+            compute_type=self._resolve_compute_type(),
+        )
+
+    def _switch_to_cpu(self, exc: BaseException) -> bool:
+        """Fall back to CPU int8 after a CUDA failure; False if already on CPU.
+
+        On Windows the GPU path needs cuDNN/cuBLAS DLLs that pip does not
+        install, and the failure often surfaces only on the first transcribe.
+        Whisper base/small run in real time on a laptop CPU, so degrading is
+        better than leaving voice mode deaf.
+        """
+        if self._device == "cpu" or not _is_gpu_runtime_error(exc):
+            return False
+        logger.warning(
+            "Faster-Whisper could not use the GPU (%s); falling back to CPU int8.",
+            exc,
+        )
+        self._device = "cpu"
+        self._compute_type = "int8"
+        self._model = None
+        return True
 
     def transcribe(
         self,
@@ -120,8 +160,15 @@ class FasterWhisperBackend(SpeechBackend):
                 if language:
                     kwargs["language"] = language
 
-                segments_iter, info = model.transcribe(tmp.name, **kwargs)
-                segments_list = list(segments_iter)
+                try:
+                    segments_iter, info = model.transcribe(tmp.name, **kwargs)
+                    segments_list = list(segments_iter)
+                except Exception as exc:
+                    if not self._switch_to_cpu(exc):
+                        raise
+                    model = self._ensure_model()
+                    segments_iter, info = model.transcribe(tmp.name, **kwargs)
+                    segments_list = list(segments_iter)
             finally:
                 try:
                     os.unlink(tmp.name)

@@ -19,7 +19,10 @@
       5b. Check for MSVC build tools and explain how to install them if absent - the mandatory
          openjarvis-rust extension is compiled from source in step 6.
       6. Run `uv sync --extra desktop --group desktop-native` so the FastAPI
-         server, speech backend, and native extension are importable.
+         server, speech backend, and native extension are importable. With
+         voice enabled (-Voice, or "y" at the prompt) the `voice` (Kokoro
+         TTS) and `wakeword` ("Hey Jarvis") extras are added and espeak-ng
+         is installed via winget, so `jarvis listen` can talk back.
       7. Optionally register the scheduled-task service (see
          deploy/windows/jarvis-service.ps1).
 
@@ -34,6 +37,8 @@
       -SkipService    Don't prompt for / install the scheduled task.
       -Service        Install the scheduled task without prompting.
       -Force          Re-run all steps even if already done.
+      -Voice          Install voice mode (Kokoro TTS + wake word) without prompting.
+      -SkipVoice      Don't prompt for / install voice mode.
 
     Under `irm | iex` the param block is unreachable (Invoke-Expression
     can't pass named args into a piped script string), so the same knobs
@@ -41,6 +46,8 @@
       $env:OPENJARVIS_SKIP_SERVICE = '1'
       $env:OPENJARVIS_SERVICE      = '1'
       $env:OPENJARVIS_FORCE        = '1'
+      $env:OPENJARVIS_VOICE        = '1'
+      $env:OPENJARVIS_SKIP_VOICE   = '1'
 
 .NOTES
     Loopback default: the scheduled-task service binds 127.0.0.1, so no
@@ -54,7 +61,9 @@
 param(
     [switch] $SkipService,
     [switch] $Service,
-    [switch] $Force
+    [switch] $Force,
+    [switch] $Voice,
+    [switch] $SkipVoice
 )
 
 $ErrorActionPreference = 'Stop'
@@ -65,6 +74,8 @@ $ErrorActionPreference = 'Stop'
 if (-not $SkipService -and $env:OPENJARVIS_SKIP_SERVICE) { $SkipService = $true }
 if (-not $Service     -and $env:OPENJARVIS_SERVICE)      { $Service     = $true }
 if (-not $Force       -and $env:OPENJARVIS_FORCE)        { $Force       = $true }
+if (-not $Voice       -and $env:OPENJARVIS_VOICE)        { $Voice       = $true }
+if (-not $SkipVoice   -and $env:OPENJARVIS_SKIP_VOICE)   { $SkipVoice   = $true }
 
 # ---------------------------------------------------------------------------
 # Output helpers - coloured but plain enough for Constrained Language Mode.
@@ -300,6 +311,9 @@ if (Test-Path (Join-Path $srcDir '.git')) {
     # Preserve history without partial-clone lazy fetches from local sources,
     # which may themselves be shallow. Remote sources can omit old blobs.
     if ($repoUrl -like 'file://*' -or (Test-Path -LiteralPath $repoUrl -ErrorAction SilentlyContinue)) {
+        # Git for Windows can't clone a file:// URL whose path contains spaces
+        # or brackets (encoded or not); the equivalent local path always works.
+        if ($repoUrl -like 'file://*') { $repoUrl = ([System.Uri]$repoUrl).LocalPath }
         & $gitExe clone $repoUrl $srcDir
     } else {
         & $gitExe clone --filter=blob:none $repoUrl $srcDir
@@ -376,13 +390,33 @@ Then re-run this installer.
 }
 
 # ---------------------------------------------------------------------------
-# 6. uv sync --extra desktop --group desktop-native
+# 6. uv sync --extra desktop --group desktop-native [--extra voice --extra wakeword]
 # ---------------------------------------------------------------------------
 
-Write-Info "Running 'uv sync --extra desktop --group desktop-native' in $srcDir (this can take a few minutes)..."
+# The desktop extra only covers speech-to-text; without the voice extra
+# `jarvis chat --voice` can hear you but has no local voice to answer with
+# (#1211). Kokoro pulls in PyTorch, so it stays opt-in.
+if ($Voice) {
+    $installVoice = $true
+} elseif ($SkipVoice) {
+    $installVoice = $false
+} elseif ([Environment]::UserInteractive -and -not [System.Console]::IsInputRedirected) {
+    $reply = Read-Host "Install voice mode (say 'Hey Jarvis', hear spoken replies; ~2 GB extra)? [y/N]"
+    $installVoice = ($reply -match '^[yY]')
+} else {
+    $installVoice = $false
+}
+
+$voiceNote = if ($installVoice) { ' --extra voice --extra wakeword' } else { '' }
+Write-Info "Running 'uv sync --extra desktop --group desktop-native$voiceNote' in $srcDir (this can take a few minutes)..."
 Push-Location $srcDir
 try {
-    & $uvExe sync --extra desktop --group desktop-native
+    # `uv sync` is exact, so voice mode needs the full extra set in one call.
+    if ($installVoice) {
+        & $uvExe sync --extra desktop --group desktop-native --extra voice --extra wakeword
+    } else {
+        & $uvExe sync --extra desktop --group desktop-native
+    }
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "uv sync failed with exit code $LASTEXITCODE. Check the output above."
     }
@@ -390,6 +424,19 @@ try {
     Pop-Location
 }
 Write-Ok "Dependencies installed"
+
+if ($installVoice) {
+    # Kokoro's English G2P falls back to espeak-ng for out-of-dictionary
+    # words. Best effort: voice still works for common words without it.
+    if (Get-Command espeak-ng -ErrorAction SilentlyContinue) {
+        Write-Ok "espeak-ng already installed"
+    } elseif (Install-WithWinget -WingetId 'eSpeak-NG.eSpeak-NG' -CommandName 'espeak-ng') {
+        Write-Ok "espeak-ng installed"
+    } else {
+        Write-Warn2 "espeak-ng not installed; rare words may be mispronounced."
+        Write-Warn2 "  Install it later with: winget install eSpeak-NG.eSpeak-NG"
+    }
+}
 
 # ---------------------------------------------------------------------------
 # 7. Ollama - install + start + wait for daemon
@@ -607,6 +654,12 @@ if ($pathNeedsRefresh) {
     Write-Host "            current PowerShell won't see it until restart)"
 } else {
     Write-Host "  Run it:  $nextCmd"
+}
+
+if ($installVoice) {
+    Write-Host ""
+    Write-Host "  Voice:   jarvis listen               (say 'Hey Jarvis')"
+    Write-Host "           jarvis listen --autostart   (start at logon)"
 }
 
 if (-not $modelPullOk) {

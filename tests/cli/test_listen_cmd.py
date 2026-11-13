@@ -1,0 +1,137 @@
+"""``jarvis listen``: defaults, autostart, and the wake-word input loop."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+from click.testing import CliRunner
+
+from openjarvis.cli import _assistant, listen_cmd
+from openjarvis.cli._voice_chat import VOICE_EXIT
+from openjarvis.core.config import JarvisConfig
+
+
+def _run_listen(args: list[str], config: JarvisConfig):
+    with (
+        patch("openjarvis.core.config.load_config", return_value=config),
+        patch("openjarvis.cli.chat_cmd.chat") as chat,
+    ):
+        result = CliRunner().invoke(listen_cmd.listen, args)
+    return result, (chat.call_args.kwargs if chat.called else {})
+
+
+def test_listen_defaults_to_a_tool_agent_and_pc_tools() -> None:
+    result, kwargs = _run_listen([], JarvisConfig())
+    assert result.exit_code == 0, result.output
+    assert kwargs["wake_mode"] is True and kwargs["voice_mode"] is True
+    assert kwargs["agent_name"] == _assistant.LISTEN_DEFAULT_AGENT
+    assert "pc_control" in kwargs["tools"] and "set_reminder" in kwargs["tools"]
+    assert kwargs["skip_runtime_panel"] is True
+
+
+def test_listen_keeps_configured_agent_and_adds_desktop_tools() -> None:
+    config = JarvisConfig()
+    config.agent.default_agent = "native_react"
+    config.tools.enabled = "calculator,web_search"
+    _, kwargs = _run_listen([], config)
+    assert kwargs["agent_name"] is None
+    tools = kwargs["tools"].split(",")
+    assert tools[:2] == ["calculator", "web_search"]
+    assert "pc_control" in tools and tools.count("calculator") == 1
+
+
+def test_explicit_tools_win() -> None:
+    _, kwargs = _run_listen(["--tools", "calculator"], JarvisConfig())
+    assert kwargs["tools"] == "calculator"
+
+
+def test_autostart_writes_and_removes_startup_script(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(listen_cmd.sys, "platform", "win32")
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    runner = CliRunner()
+
+    on = runner.invoke(listen_cmd.listen, ["--autostart"])
+    script = (
+        tmp_path
+        / "Microsoft/Windows/Start Menu/Programs/Startup"
+        / listen_cmd._STARTUP_FILE
+    )
+    assert on.exit_code == 0, on.output
+    assert "-m openjarvis.cli listen" in script.read_text(encoding="utf-8")
+
+    off = runner.invoke(listen_cmd.listen, ["--no-autostart"])
+    assert off.exit_code == 0 and not script.exists()
+
+
+def test_autostart_is_windows_only(monkeypatch) -> None:
+    monkeypatch.setattr(listen_cmd.sys, "platform", "linux")
+    result = CliRunner().invoke(listen_cmd.listen, ["--autostart"])
+    assert result.exit_code != 0 and "Windows only" in result.output
+
+
+def _announcer() -> _assistant.ReminderAnnouncer:
+    return _assistant.ReminderAnnouncer(MagicMock(), speak_aloud=True)
+
+
+def test_wake_then_record() -> None:
+    detector = SimpleNamespace(label="hey jarvis", wait=MagicMock(return_value=True))
+    with (
+        patch("openjarvis.speech.voice_io.play_chime"),
+        patch.object(_assistant, "record_voice", return_value="open notepad"),
+    ):
+        result = _assistant.wait_for_wake_command(
+            MagicMock(), MagicMock(), detector, _announcer()
+        )
+    assert result == "open notepad"
+
+
+def test_exit_phrase_ends_the_session() -> None:
+    detector = SimpleNamespace(label="hey jarvis", wait=MagicMock(return_value=True))
+    with (
+        patch("openjarvis.speech.voice_io.play_chime"),
+        patch.object(_assistant, "record_voice", return_value="Stop listening."),
+    ):
+        result = _assistant.wait_for_wake_command(
+            MagicMock(), MagicMock(), detector, _announcer()
+        )
+    assert result is VOICE_EXIT
+
+
+def test_ctrl_c_while_waiting_exits() -> None:
+    detector = SimpleNamespace(
+        label="hey jarvis", wait=MagicMock(side_effect=KeyboardInterrupt)
+    )
+    result = _assistant.wait_for_wake_command(
+        MagicMock(), MagicMock(), detector, _announcer()
+    )
+    assert result is VOICE_EXIT
+
+
+def test_pending_reminders_are_spoken_while_waiting() -> None:
+    announcer = _announcer()
+    announcer.pending.put("Reminder: tea")
+    spoken = []
+    detector = SimpleNamespace(label="hey jarvis", wait=MagicMock(return_value=True))
+    with (
+        patch.object(
+            _assistant, "speak", side_effect=lambda text, *a, **k: spoken.append(text)
+        ),
+        patch("openjarvis.speech.voice_io.play_chime"),
+        patch.object(_assistant, "record_voice", return_value="thanks"),
+    ):
+        _assistant.wait_for_wake_command(MagicMock(), MagicMock(), detector, announcer)
+    assert spoken == ["Reminder: tea"]
+
+
+def test_barge_in_skips_the_wake_word() -> None:
+    detector = SimpleNamespace(label="hey jarvis", wait=MagicMock())
+    with (
+        patch("openjarvis.speech.voice_io.play_chime"),
+        patch.object(_assistant, "record_voice", return_value="what time is it"),
+    ):
+        result = _assistant.wait_for_wake_command(
+            MagicMock(), MagicMock(), detector, _announcer(), skip_wake=True
+        )
+    assert result == "what time is it"
+    detector.wait.assert_not_called()
