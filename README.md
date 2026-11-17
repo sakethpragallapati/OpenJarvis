@@ -32,6 +32,23 @@
 >
 > **[Roadmap](https://open-jarvis.github.io/OpenJarvis/development/roadmap/)**
 
+## Jarvis for Windows: download and install
+
+This fork adds **Jarvis**, a hands-free voice assistant that controls your
+Windows PC: apps, websites, files, WhatsApp, music, alarms and the screen.
+It has its own window and tray icon.
+
+1. Download **`OpenJarvis-Setup-<version>.exe`** from
+   [Releases](../../releases/latest) and run it (Windows 10/11, 64-bit; no
+   admin rights needed).
+2. Choose the brain: **on this PC** (Ollama + `qwen3.5:4b`; private, best
+   with an NVIDIA GPU) or **Groq cloud** (fast on any PC; free API key).
+   You can switch later with the gear icon in the JARVIS window.
+3. Start **Jarvis** from the Start menu and talk.
+
+See the [voice assistant guide](docs/user-guide/voice-assistant.md) for
+what it can do, settings and troubleshooting.
+
 ## Why OpenJarvis?
 
 Personal AI agents are exploding in popularity, but nearly all of them still route intelligence through cloud APIs. Your "personal" AI continues to depend on someone else's server. At the same time, our [Intelligence Per Watt](https://www.intelligence-per-watt.ai/) research showed that local language models already handle 88.7% of single-turn chat and reasoning queries, with intelligence efficiency improving 5.3× from 2023 to 2025. The models and hardware are increasingly ready. What has been missing is the software stack to make local-first personal AI practical.

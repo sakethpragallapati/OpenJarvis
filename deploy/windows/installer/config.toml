@@ -1,0 +1,47 @@
+# OpenJarvis (Jarvis for Windows) settings.
+# The JARVIS window's settings (gear icon) change the brain and speech-to-text
+# for you; everything else can be edited here. Restart Jarvis afterwards.
+
+[engine]
+# "ollama" = the local model below; "groq" = Groq's cloud (API key in the
+# window's settings, kept in the Windows Credential Manager).
+default = "@ENGINE@"
+
+[engine.ollama]
+keep_alive = "30m"          # keep the model loaded between requests
+
+[engine.groq]
+model = "qwen/qwen3.8-27b"  # tools + screen vision in one model
+
+[intelligence]
+default_model = "qwen3.5:4b" # the local (Ollama) model
+
+[speech]
+backend = "@STT@"           # "faster-whisper" (on this PC) or "groq"
+model = "@WHISPER_MODEL@"
+device = "@DEVICE@"
+compute_type = "@COMPUTE@"
+language = "en"
+tts_backend = "chatterbox"
+voice_id = "jarvis"         # ~/.openjarvis/voices/jarvis.wav
+voice_speed = 1.0
+silence_threshold = 0       # 0 = measure the room's noise at start
+wake_word = "hey_jarvis"
+wake_word_threshold = 0.5   # raise if it wakes by itself, lower if it misses you
+wake_word_barge_in = true
+listen_mode = "always"      # or "wake" to only answer after "Hey Jarvis"
+end_silence_seconds = 0.9   # pause that ends your sentence
+follow_up_seconds = 6       # after a reply, talk again without "Hey Jarvis"
+vocabulary = ""             # names Whisper should spell right, comma-separated
+vad_filter = true
+
+[desktop]
+fast_path = true            # "open X", volume, alarms... without the model
+vision = true               # look at the screen when asked
+max_steps = 12
+mcp_servers = ""
+file_folders = ""           # extra folders for the file tools, ";"-separated
+
+[analytics]
+enabled = false
+choice_recorded = true
