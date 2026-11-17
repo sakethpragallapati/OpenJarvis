@@ -70,6 +70,28 @@ def test_low_vram_warns_and_moves_speech_to_cpu(monkeypatch, config) -> None:
     assert config.speech.device == "cpu"
 
 
+@pytest.mark.parametrize(
+    ("model", "language", "expected"),
+    [
+        ("small.en", "en", "base.en"),
+        ("large-v3-turbo", "en", "base.en"),
+        ("large-v3", "", "base"),
+        ("base.en", "en", "base.en"),
+        ("tiny", "", "tiny"),
+        (r"C:\models\my-whisper", "en", r"C:\models\my-whisper"),
+    ],
+)
+def test_cpu_fallback_keeps_a_fast_whisper(
+    monkeypatch, config, model, language, expected
+) -> None:
+    config.speech.model, config.speech.language = model, language
+    config.speech.device = "cuda"
+    _patch(monkeypatch, None, vram=300)
+    console = MagicMock()
+    _assistant.apply_power_policy(console, config, "m", explicit_model=False)
+    assert (config.speech.device, config.speech.model) == ("cpu", expected)
+
+
 def test_battery_description() -> None:
     status = BatteryStatus(percent=22, plugged_in=False, seconds_left=2448)
     assert status.describe() == "22%, on battery, about 0h 40m left"

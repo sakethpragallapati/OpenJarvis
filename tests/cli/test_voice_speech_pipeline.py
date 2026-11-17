@@ -118,3 +118,46 @@ def test_missing_tts_hint_names_the_voice_extra() -> None:
         speak("Hello.", console, VoiceSession(JarvisConfig()))
 
     assert "uv sync --extra voice" in str(console.print.call_args)
+
+
+def test_the_window_hears_each_sentence_as_it_is_spoken() -> None:
+    import io
+    import wave
+
+    from openjarvis.core import live
+
+    def wav(seconds: float) -> bytes:
+        out = io.BytesIO()
+        with wave.open(out, "wb") as clip:
+            clip.setnchannels(1)
+            clip.setsampwidth(2)
+            clip.setframerate(24000)
+            clip.writeframes(b"\0\0" * int(24000 * seconds))
+        return out.getvalue()
+
+    backend = MagicMock()
+    backend.backend_id = "fake"
+    backend.health.return_value = True
+    backend.synthesize.side_effect = lambda text, **kw: SimpleNamespace(
+        audio=wav(len(text) / 40), sample_rate=24000
+    )
+    events: list = []
+    unsubscribe = live.subscribe(lambda kind, data: events.append((kind, data)))
+    text = "First sentence here is fine. " + "Second part is a much longer one. " * 3
+    try:
+        with (
+            patch.object(TTSRegistry, "contains", return_value=True),
+            patch.object(TTSRegistry, "get", return_value=lambda: backend),
+            patch("openjarvis.speech.voice_io.play_wav", return_value=True),
+        ):
+            assert speak(text, MagicMock(), VoiceSession(JarvisConfig())) is True
+    finally:
+        unsubscribe()
+    said = [d for k, d in events if k == "say"]
+    assert len(said) >= 2 and [d["index"] for d in said] == list(range(len(said)))
+    total = said[0]["total"]
+    assert said[0]["start"] == 0 and all(d["total"] == total for d in said)
+    assert said[1]["start"] == len(said[0]["text"])  # where each sentence begins
+    assert said[0]["seconds"] == round(len(said[0]["text"]) / 40, 2)  # real length
+    kinds = [k for k, _ in events if k in ("speaking", "say", "spoken")]
+    assert kinds[0] == "speaking" and kinds[-1] == "spoken"

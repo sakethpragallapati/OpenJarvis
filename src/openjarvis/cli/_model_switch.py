@@ -108,6 +108,13 @@ def resolve_chat_cli_model(
     if explicit and explicit.lower() != SMART_MODEL_TOKEN:
         return explicit
 
+    if engine_name == "groq":
+        # default_model is the local model; Groq's is set separately so
+        # switching between them keeps both.
+        groq_model = (getattr(config.engine.groq, "model", "") or "").strip()
+        if groq_model:
+            return sanitize_model_id(groq_model)
+
     preset = variant_preset_model(config, chat_variant)
     if preset:
         return sanitize_model_id(preset)

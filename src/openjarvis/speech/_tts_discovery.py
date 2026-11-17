@@ -16,12 +16,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Priority order: local first, then cloud.
-TTS_BACKEND_ORDER = ("kokoro", "openai_tts", "cartesia", "elevenlabs")
+TTS_BACKEND_ORDER = ("chatterbox", "kokoro", "openai_tts", "cartesia", "elevenlabs")
 
 # Voice IDs are backend-specific and NOT portable. ``speech.voice_id`` applies
 # only to ``speech.tts_backend``; if synthesis falls back to another backend we
 # use that backend's own default rather than passing an unrecognized ID through.
 BACKEND_DEFAULT_VOICE = {
+    # ~/.openjarvis/voices/jarvis.wav if present, else the model's own voice.
+    "chatterbox": "jarvis",
     "kokoro": "bm_george",  # British male
     "openai_tts": "onyx",  # deepest OpenAI preset
     "cartesia": "",  # no safe static default; let Cartesia choose
@@ -71,7 +73,7 @@ def voice_preferences(config: "JarvisConfig") -> tuple[str, str, float]:
     """Resolve ``(tts_backend, voice_id, speed)`` from *config*."""
     speech = getattr(config, "speech", None)
     return (
-        getattr(speech, "tts_backend", "kokoro") or "kokoro",
+        getattr(speech, "tts_backend", "chatterbox") or "chatterbox",
         getattr(speech, "voice_id", "") or "",
         float(getattr(speech, "voice_speed", 1.0)),
     )

@@ -69,12 +69,18 @@ def _set_autostart(enabled: bool) -> str:
     "--agent",
     "agent_name",
     default=None,
-    help="Agent type (default: orchestrator, which can use tools).",
+    help="Agent type (default: desktop - agentic PC control - or orchestrator).",
 )
 @click.option(
     "--tools",
     default=None,
     help="Comma-separated tools (default: PC control, clipboard, reminders, ...).",
+)
+@click.option(
+    "--always/--wake-word",
+    "always_listen",
+    default=None,
+    help="Listen all the time without the wake word (default: speech.listen_mode).",
 )
 @click.option(
     "--autostart/--no-autostart",
@@ -88,13 +94,20 @@ def listen(
     model_name: str | None,
     agent_name: str | None,
     tools: str | None,
+    always_listen: bool | None,
     autostart: bool | None,
 ) -> None:
     if autostart is not None:
         click.echo(_set_autostart(autostart))
         return
 
-    from openjarvis.cli._assistant import LISTEN_DEFAULT_AGENT, LISTEN_DEFAULT_TOOLS
+    from openjarvis.agents.desktop import desktop_agent_available
+    from openjarvis.cli._assistant import (
+        LISTEN_DEFAULT_AGENT,
+        LISTEN_DEFAULT_TOOLS,
+        LISTEN_DESKTOP_TOOLS,
+        LISTEN_FALLBACK_AGENT,
+    )
     from openjarvis.cli.chat_cmd import chat
     from openjarvis.core.config import load_config
 
@@ -102,12 +115,35 @@ def listen(
     if agent_name is None and config.agent.default_agent in ("", "simple"):
         # The simple agent can't call tools, so "open VS Code" would only
         # get a chatty answer. Respect any other configured agent.
-        agent_name = LISTEN_DEFAULT_AGENT
+        if desktop_agent_available():
+            agent_name = LISTEN_DEFAULT_AGENT
+        else:
+            click.echo(
+                "Tip: `uv sync --extra agent` enables the agentic desktop agent "
+                "(screen vision, memory, full PC control). Using the "
+                f"{LISTEN_FALLBACK_AGENT} agent.",
+                err=True,
+            )
+            agent_name = LISTEN_FALLBACK_AGENT
     if tools is None:
-        # The desktop set, not the chat config's list: every tool's schema is
-        # re-sent with each request, and code/shell/file tools add prompt
-        # tokens (= latency) without being useful by voice. --tools overrides.
-        tools = LISTEN_DEFAULT_TOOLS
+        # Not the chat config's list: every tool's schema is re-sent with
+        # each request, and code/shell/file tools add prompt tokens (=
+        # latency) without being useful by voice. --tools overrides. The
+        # desktop agent brings its own PC tools and only bridges these in.
+        tools = (
+            LISTEN_DESKTOP_TOOLS
+            if (agent_name or config.agent.default_agent) == "desktop"
+            else LISTEN_DEFAULT_TOOLS
+        )
+
+    if engine_key is None:
+        from rich.console import Console
+
+        from openjarvis.cli._assistant import ensure_local_engine
+
+        # Started from the shortcut or at sign-in, Ollama may still be coming
+        # up; without this Jarvis fell back to another engine.
+        ensure_local_engine(config, Console(stderr=True))
 
     ctx.invoke(
         chat,
@@ -120,6 +156,7 @@ def listen(
         persona_name=None,
         voice_mode=True,
         wake_mode=True,
+        always_listen=always_listen,
         num_ctx=None,
         num_gpu=None,
         skip_runtime_panel=True,

@@ -27,6 +27,34 @@ from openjarvis.intelligence.model_catalog import resolve_model_id_for_engine
 logger = logging.getLogger(__name__)
 
 
+def _with_image_parts(dicts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Ollama-style ``images`` (base64) as OpenAI content parts.
+
+    ``messages_to_dicts`` keeps images in Ollama's ``"images"`` field; the
+    OpenAI chat API wants ``content`` as text + ``image_url`` parts instead.
+    """
+    out = []
+    for d in dicts:
+        images = d.get("images")
+        if not images:
+            out.append(d)
+            continue
+        d = {k: v for k, v in d.items() if k != "images"}
+        parts: List[Dict[str, Any]] = []
+        if d.get("content"):
+            parts.append({"type": "text", "text": d["content"]})
+        for image in images:
+            url = (
+                image
+                if str(image).startswith("data:")
+                else (f"data:image/png;base64,{image}")
+            )
+            parts.append({"type": "image_url", "image_url": {"url": url}})
+        d["content"] = parts
+        out.append(d)
+    return out
+
+
 class _OpenAICompatibleEngine(AsyncHTTPEngineMixin, InferenceEngine):
     """Base for engines that serve the OpenAI ``/v1/chat/completions`` API."""
 
@@ -90,7 +118,7 @@ class _OpenAICompatibleEngine(AsyncHTTPEngineMixin, InferenceEngine):
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "model": self._resolve_model_id(model),
-            "messages": messages_to_dicts(messages),
+            "messages": _with_image_parts(messages_to_dicts(messages)),
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": False,
@@ -182,7 +210,7 @@ class _OpenAICompatibleEngine(AsyncHTTPEngineMixin, InferenceEngine):
     ) -> AsyncIterator[str]:
         payload: Dict[str, Any] = {
             "model": self._resolve_model_id(model),
-            "messages": messages_to_dicts(messages),
+            "messages": _with_image_parts(messages_to_dicts(messages)),
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": True,
@@ -243,7 +271,7 @@ class _OpenAICompatibleEngine(AsyncHTTPEngineMixin, InferenceEngine):
         **kwargs: Any,
     ) -> AsyncIterator["StreamChunk"]:
         """Yield StreamChunks with content, tool_calls, and finish_reason."""
-        msg_dicts = messages_to_dicts(messages)
+        msg_dicts = _with_image_parts(messages_to_dicts(messages))
         payload: Dict[str, Any] = {
             "model": self._resolve_model_id(model),
             "messages": msg_dicts,

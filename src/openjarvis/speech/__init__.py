@@ -3,14 +3,20 @@
 import importlib
 
 # Optional STT backends — each registers itself via @SpeechRegistry.register()
-for _mod in ("faster_whisper", "openai_whisper", "deepgram"):
+for _mod in ("faster_whisper", "openai_whisper", "deepgram", "groq_whisper"):
     try:
         importlib.import_module(f".{_mod}", __name__)
     except ImportError:
         pass
 
 # Optional TTS backends — each registers itself via @TTSRegistry.register()
-for _mod in ("cartesia_tts", "elevenlabs_tts", "kokoro_tts", "openai_tts"):
+for _mod in (
+    "cartesia_tts",
+    "chatterbox_tts",
+    "elevenlabs_tts",
+    "kokoro_tts",
+    "openai_tts",
+):
     try:
         importlib.import_module(f".{_mod}", __name__)
     except ImportError:

@@ -1,0 +1,1128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>J.A.R.V.I.S.</title>
+<style>
+  :root {
+    --bg: #010506;
+    --teal: 0, 229, 204;
+    --ice: 120, 220, 255;
+    --text: #cfeeea;
+    --dim: #5d8a85;
+    --faint: rgba(0, 229, 204, 0.12);
+    --line: rgba(0, 229, 204, 0.16);
+    --panel: rgba(2, 22, 24, 0.55);
+    --red: 255, 90, 90;
+    --mono: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+    --sans: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--text); font-family: var(--sans);
+    -webkit-font-smoothing: antialiased; user-select: none;
+  }
+  body {
+    display: grid; grid-template-columns: 1fr;
+    background:
+      radial-gradient(ellipse 60% 55% at 38% 46%, rgba(0, 90, 82, 0.20), transparent 70%),
+      radial-gradient(ellipse 120% 90% at 50% 50%, #021012 0%, var(--bg) 70%);
+  }
+  body.panel-open { grid-template-columns: 1fr minmax(320px, 400px); }
+  /* Narrow window: the open panel floats over the ring instead. */
+  body.narrow.panel-open { grid-template-columns: 1fr; }
+  body.narrow.panel-open #panel {
+    position: fixed; top: 10px; right: 10px; bottom: 10px; margin: 0; z-index: 6;
+    width: min(400px, calc(100vw - 20px)); background: rgba(2, 18, 20, 0.94);
+  }
+
+  /* ---------- stage (the ring) ---------- */
+  #stage { position: relative; min-width: 0; display: flex; flex-direction: column; }
+  #ring { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #topbar {
+    position: relative; z-index: 2; display: flex; gap: 10px; align-items: center;
+    padding: 16px 20px 0; font: 11px/1 var(--mono); letter-spacing: 0.12em;
+    color: var(--dim); text-transform: uppercase;
+  }
+  .chip {
+    border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px;
+    background: rgba(0, 30, 32, 0.35); white-space: nowrap;
+  }
+  .chip b { color: rgb(var(--teal)); font-weight: 600; }
+  #clock { margin-left: auto; }
+  #toggle-panel, #open-settings {
+    position: relative; width: 34px; height: 34px; border-radius: 50%; display: grid;
+    place-items: center; color: var(--dim); border: 1px solid var(--line);
+    background: rgba(0, 30, 32, 0.35); transition: color 0.2s, border-color 0.2s;
+  }
+  #toggle-panel:hover, body.panel-open #toggle-panel, #open-settings:hover {
+    color: rgb(var(--teal)); border-color: rgba(var(--teal), 0.45);
+  }
+  #toggle-panel svg, #open-settings svg { width: 17px; height: 17px; }
+  #open-settings:focus-visible { outline: 2px solid rgba(var(--teal), 0.7); outline-offset: 2px; }
+  #toggle-panel .dot {
+    position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%;
+    background: rgb(var(--teal)); box-shadow: 0 0 8px rgb(var(--teal));
+  }
+  #toggle-panel:focus-visible { outline: 2px solid rgba(var(--teal), 0.7); outline-offset: 2px; }
+  #center {
+    position: relative; z-index: 2; flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: flex-end; pointer-events: none;
+    padding-bottom: 6px;
+  }
+  #name {
+    font: 600 15px/1 var(--mono); letter-spacing: 0.55em; padding-left: 0.55em;
+    color: rgba(var(--teal), 0.85); text-shadow: 0 0 18px rgba(var(--teal), 0.55);
+  }
+  #status {
+    margin-top: 12px; font: 600 12px/1 var(--mono); letter-spacing: 0.3em;
+    padding-left: 0.3em; color: rgba(var(--teal), 0.7); text-transform: uppercase;
+    transition: color 0.3s;
+  }
+  #status.alert { color: rgb(var(--red)); }
+  #sub {
+    margin-top: 10px; min-height: 22px; max-width: min(640px, 86%);
+    text-align: center; font-size: 15px; line-height: 1.45; color: var(--text);
+    opacity: 0.9; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; user-select: text; pointer-events: auto;
+  }
+  #sub .tool { font-family: var(--mono); font-size: 13px; color: rgb(var(--ice)); }
+  #sub.live { color: #eafffb; text-shadow: 0 0 14px rgba(var(--teal), 0.35); }
+  .caret {
+    display: inline-block; width: 7px; height: 1em; margin-left: 3px; vertical-align: -2px;
+    background: rgb(var(--teal)); box-shadow: 0 0 8px rgb(var(--teal));
+    animation: blink 0.9s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  /* Streaming words: hidden until said, then each one materialises. */
+  /* A word never splits across lines; its letters type in one by one. */
+  .w { display: inline-block; white-space: nowrap; }
+  .w.pending, .ch.pending { display: none; }
+  .ch { display: inline-block; }
+  .ch.shown { animation: ch-in 0.42s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+  .ch.instant { animation: ch-in 0.2s ease-out both; }
+  @keyframes ch-in {
+    0%   { opacity: 0; transform: translateY(0.35em) scale(0.85); filter: blur(4px);
+           text-shadow: 0 0 12px rgba(var(--teal), 1); color: rgb(var(--teal)); }
+    50%  { opacity: 1; filter: blur(0); text-shadow: 0 0 9px rgba(var(--teal), 0.7);
+           color: rgb(var(--teal)); }
+    100% { opacity: 1; transform: none; filter: none; text-shadow: none; }
+  }
+  #sub .ch.shown { animation: sub-ch-in 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+  @keyframes sub-ch-in {
+    0%   { opacity: 0; transform: translateY(0.45em) scale(0.8); filter: blur(5px);
+           text-shadow: 0 0 20px rgba(var(--teal), 1); color: rgb(var(--teal)); }
+    55%  { opacity: 1; filter: blur(0); text-shadow: 0 0 14px rgba(var(--teal), 0.8); }
+    100% { opacity: 1; transform: none; filter: none; text-shadow: 0 0 14px rgba(var(--teal), 0.35); }
+  }
+  /* Lines and list items appear with their first word, not before. */
+  .msg.streaming .text p:not(:has(.w:not(.pending))),
+  .msg.streaming .text li:not(:has(.w:not(.pending))),
+  .msg.streaming .text ul:not(:has(.w:not(.pending))),
+  .msg.streaming .text ol:not(:has(.w:not(.pending))) { display: none; }
+  .msg.streaming .who::after {
+    content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 8px;
+    border-radius: 50%; background: rgb(var(--teal)); box-shadow: 0 0 8px rgb(var(--teal));
+    vertical-align: 1px; animation: blink 0.9s steps(1) infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ch.shown, .ch.instant, #sub .ch.shown { animation: none; }
+  }
+
+  /* ---------- command bar ---------- */
+  #bar {
+    position: relative; z-index: 3; display: flex; gap: 10px; align-items: center;
+    width: min(680px, calc(100% - 40px)); margin: 18px auto 26px;
+  }
+  #input-wrap {
+    flex: 1; display: flex; align-items: center; height: 46px; padding: 0 6px 0 18px;
+    border: 1px solid var(--line); border-radius: 999px; background: rgba(0, 24, 26, 0.6);
+    backdrop-filter: blur(10px); transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  #input-wrap:focus-within {
+    border-color: rgba(var(--teal), 0.55); box-shadow: 0 0 22px rgba(var(--teal), 0.15);
+  }
+  #cmd {
+    flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--text);
+    font: 15px var(--sans); user-select: text;
+  }
+  #cmd::placeholder { color: var(--dim); }
+  button {
+    font: inherit; color: inherit; background: none; border: 0; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .round {
+    width: 46px; height: 46px; flex: none; border-radius: 50%; display: grid;
+    place-items: center; border: 1px solid var(--line); background: rgba(0, 24, 26, 0.6);
+    color: rgb(var(--teal)); transition: background 0.2s, border-color 0.2s, color 0.2s;
+  }
+  .round:hover { background: rgba(0, 60, 58, 0.6); border-color: rgba(var(--teal), 0.5); }
+  .round svg { width: 20px; height: 20px; }
+  .round.off { color: var(--dim); }
+  .round.off .on-only, .round:not(.off) .off-only { display: none; }
+  #send { width: 36px; height: 36px; border-radius: 50%; color: rgb(var(--teal)); display: grid; place-items: center; }
+  #send:hover { background: rgba(var(--teal), 0.12); }
+  #send svg { width: 18px; height: 18px; }
+  .round:focus-visible, #send:focus-visible, .tiny:focus-visible {
+    outline: 2px solid rgba(var(--teal), 0.7); outline-offset: 2px;
+  }
+
+  /* ---------- confirm card ---------- */
+  #confirm {
+    position: absolute; z-index: 5; left: 50%; bottom: 96px; transform: translate(-50%, 12px);
+    width: min(520px, calc(100% - 40px)); padding: 16px 18px; border-radius: 14px;
+    border: 1px solid rgba(var(--teal), 0.45); background: rgba(0, 26, 28, 0.92);
+    box-shadow: 0 0 40px rgba(var(--teal), 0.18); opacity: 0; pointer-events: none;
+    transition: opacity 0.25s, transform 0.25s;
+  }
+  #confirm.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+  #confirm p { margin: 0 0 12px; line-height: 1.45; }
+  #confirm .label { font: 600 11px var(--mono); letter-spacing: 0.2em; color: rgb(var(--teal)); margin-bottom: 6px; }
+  #confirm .row { display: flex; gap: 10px; }
+  .pill {
+    padding: 8px 18px; border-radius: 999px; border: 1px solid var(--line);
+    background: rgba(0, 40, 40, 0.6);
+  }
+  .pill.primary { border-color: rgba(var(--teal), 0.6); color: rgb(var(--teal)); }
+  .pill:hover { background: rgba(0, 70, 68, 0.6); }
+
+  /* ---------- conversation panel ---------- */
+  #panel {
+    position: relative; z-index: 2; display: none; flex-direction: column; min-height: 0;
+    margin: 14px 14px 14px 0; border: 1px solid var(--line); border-radius: 16px;
+    background: var(--panel); backdrop-filter: blur(14px);
+  }
+  #panel header {
+    display: flex; align-items: center; gap: 8px; padding: 14px 16px 10px;
+    font: 600 11px/1 var(--mono); letter-spacing: 0.22em; color: var(--dim);
+    border-bottom: 1px solid var(--faint);
+  }
+  #panel header span { flex: 1; }
+  body.panel-open #panel { display: flex; }
+  #close-panel { font-size: 15px; line-height: 1; padding: 3px 8px; }
+  .tiny {
+    font: 11px var(--mono); letter-spacing: 0.06em; color: var(--dim); padding: 5px 7px;
+    border-radius: 6px; border: 1px solid transparent; white-space: nowrap;
+  }
+  .tiny:hover { color: var(--text); border-color: var(--line); }
+  .tiny.on { color: rgb(var(--teal)); }
+  #log { flex: 1; overflow-y: auto; padding: 12px 14px 16px; user-select: text; scroll-behavior: smooth; }
+  #log::-webkit-scrollbar { width: 8px; }
+  #log::-webkit-scrollbar-thumb { background: rgba(var(--teal), 0.15); border-radius: 8px; }
+  .msg { margin: 10px 0 14px; animation: rise 0.25s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .who { font: 600 10px/1 var(--mono); letter-spacing: 0.22em; margin-bottom: 6px; color: var(--dim); }
+  .msg.jarvis .who { color: rgb(var(--teal)); }
+  .msg.you .text { color: #e9f6f4; }
+  .text { font-size: 14px; line-height: 1.55; word-wrap: break-word; }
+  .text p { margin: 0 0 6px; }
+  .text ul, .text ol { margin: 4px 0 6px; padding-left: 20px; }
+  .text li { margin: 2px 0; }
+  .text code { font: 12.5px var(--mono); background: rgba(var(--teal), 0.08); padding: 1px 5px; border-radius: 4px; }
+  .text a { color: rgb(var(--ice)); }
+  .text strong { color: #fff; }
+  .meta { margin-top: 4px; font: 11px var(--mono); color: var(--dim); }
+  .step {
+    margin: 2px 0 2px 2px; font: 12px/1.5 var(--mono); color: rgba(var(--ice), 0.8);
+    display: flex; gap: 6px; animation: rise 0.2s ease-out;
+  }
+  .step .mark { width: 12px; flex: none; }
+  .step.fail { color: rgba(var(--red), 0.9); }
+  .step .why { display: block; color: rgba(var(--red), 0.75); white-space: normal; }
+  .note { margin: 8px 0; font: 12px var(--mono); color: var(--dim); font-style: italic; }
+  .note.err { color: rgba(var(--red), 0.85); font-style: normal; }
+  .note.remind { color: rgb(var(--teal)); font-style: normal; }
+
+  /* ---------- boot / fatal overlay ---------- */
+  #boot {
+    position: absolute; z-index: 4; left: 24px; bottom: 100px; width: min(460px, 70%);
+    font: 12px/1.7 var(--mono); color: rgba(var(--teal), 0.75); pointer-events: none;
+    transition: opacity 0.6s;
+  }
+  #boot.done { opacity: 0; }
+  #boot .ln { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #boot .ln::before { content: "› "; color: rgba(var(--teal), 0.4); }
+  #fatal {
+    position: fixed; inset: 0; z-index: 10; display: none; place-items: center;
+    background: rgba(0, 0, 0, 0.75); backdrop-filter: blur(6px);
+  }
+  #fatal.show { display: grid; }
+  #fatal .card {
+    width: min(560px, calc(100% - 40px)); padding: 22px; border-radius: 16px;
+    border: 1px solid rgba(var(--red), 0.5); background: #0b0d0e;
+  }
+  #fatal h2 { margin: 0 0 8px; font: 600 14px var(--mono); letter-spacing: 0.15em; color: rgb(var(--red)); }
+  #fatal pre { white-space: pre-wrap; font: 12px/1.5 var(--mono); color: #e8c9c9; max-height: 40vh; overflow: auto; user-select: text; }
+  #fatal .row { display: flex; gap: 10px; margin-top: 14px; }
+
+  /* ---------- settings ---------- */
+  #settings {
+    position: fixed; inset: 0; z-index: 9; display: none; place-items: center;
+    background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(6px); padding: 16px;
+  }
+  #settings.show { display: grid; }
+  #settings .card {
+    width: min(560px, 100%); max-height: calc(100vh - 32px); overflow-y: auto;
+    padding: 22px 22px 18px; border-radius: 16px; border: 1px solid rgba(var(--teal), 0.4);
+    background: #061214; box-shadow: 0 0 50px rgba(var(--teal), 0.12);
+  }
+  #settings h2 { margin: 0 0 14px; font: 600 13px var(--mono); letter-spacing: 0.22em; color: rgb(var(--teal)); }
+  #settings fieldset { border: 1px solid var(--faint); border-radius: 12px; margin: 0 0 12px; padding: 10px 14px 12px; }
+  #settings legend { padding: 0 6px; font: 600 10.5px var(--mono); letter-spacing: 0.2em; color: var(--dim); text-transform: uppercase; }
+  .choice { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; cursor: pointer; line-height: 1.4; }
+  .choice input { margin-top: 3px; accent-color: rgb(var(--teal)); }
+  .choice b { color: #eafaf7; font-weight: 600; }
+  .choice small { display: block; color: var(--dim); font-size: 12px; }
+  .choice.disabled { opacity: 0.45; cursor: default; }
+  #settings select, #settings input[type="password"] {
+    width: 100%; margin: 2px 0 6px 26px; max-width: calc(100% - 26px); padding: 7px 10px;
+    color: var(--text); background: rgba(0, 30, 32, 0.6); border: 1px solid var(--line);
+    border-radius: 8px; font: 13px var(--mono);
+  }
+  #settings select:disabled { opacity: 0.4; }
+  .keyrow { display: flex; gap: 8px; align-items: center; }
+  .keyrow input[type="password"] { margin: 0 !important; max-width: none !important; flex: 1; }
+  #settings .hint { margin: 6px 0 0; font-size: 12px; line-height: 1.45; color: var(--dim); }
+  #settings .hint.ok { color: rgb(var(--teal)); }
+  #settings .hint.bad { color: rgba(var(--red), 0.9); }
+  #settings .problem {
+    margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.45;
+    border: 1px solid rgba(var(--red), 0.45); background: rgba(60, 10, 10, 0.35); color: #f3d6d6;
+  }
+  #settings a { color: rgb(var(--ice)); font-size: 12.5px; }
+  #settings .row { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  @media (prefers-reduced-motion: reduce) { .msg, .step { animation: none; } }
+</style>
+</head>
+<body>
+<main id="stage">
+  <canvas id="ring" aria-hidden="true"></canvas>
+  <div id="topbar">
+    <span class="chip" id="chip-model">Starting…</span>
+    <span id="clock"></span>
+    <button id="toggle-panel" title="Show the conversation" aria-label="Show the conversation" aria-pressed="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/></svg>
+      <span class="dot" hidden></span>
+    </button>
+    <button id="open-settings" title="Settings: local model or Groq cloud" aria-label="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </div>
+  <div id="center">
+    <div id="name">J.A.R.V.I.S.</div>
+    <div id="status" role="status" aria-live="polite">Initializing</div>
+    <div id="sub"></div>
+  </div>
+  <div id="boot" aria-hidden="true"></div>
+  <div id="confirm" role="dialog" aria-labelledby="confirm-q">
+    <div class="label">CONFIRM</div>
+    <p id="confirm-q"></p>
+    <div class="row">
+      <button class="pill primary" data-say="yes">Yes</button>
+      <button class="pill" data-say="no">No</button>
+    </div>
+  </div>
+  <div id="bar">
+    <button class="round" id="mic" title="Pause listening (Jarvis then waits for 'Hey Jarvis')" aria-label="Pause listening">
+      <svg class="on-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      <svg class="off-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M4 4l16 16"/></svg>
+    </button>
+    <form id="input-wrap" autocomplete="off">
+      <input id="cmd" placeholder="Type a command, or just talk…" aria-label="Command" spellcheck="false">
+      <button id="send" type="submit" title="Send (Enter)" aria-label="Send">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
+      </button>
+    </form>
+    <button class="round" id="stop" title="Stop speaking / stop the current task (Esc)" aria-label="Stop">
+      <svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+    </button>
+  </div>
+</main>
+
+<aside id="panel" aria-label="Conversation">
+  <header>
+    <span>CONVERSATION</span>
+    <button class="tiny" id="show-ignored" title="Also show speech that wasn't meant for Jarvis">ALL SPEECH</button>
+    <button class="tiny" id="open-log" title="Open the full log file">LOG</button>
+    <button class="tiny" id="clear" title="Clear this panel">CLEAR</button>
+    <button class="tiny" id="close-panel" title="Hide the conversation" aria-label="Hide the conversation">✕</button>
+  </header>
+  <div id="log"></div>
+</aside>
+
+<div id="fatal" role="alertdialog" aria-labelledby="fatal-h">
+  <div class="card">
+    <h2 id="fatal-h">JARVIS STOPPED</h2>
+    <pre id="fatal-text"></pre>
+    <div class="row">
+      <button class="pill primary" id="restart">Restart</button>
+      <button class="pill" id="fatal-log">Open log</button>
+    </div>
+  </div>
+</div>
+
+<div id="settings" role="dialog" aria-modal="true" aria-labelledby="settings-h">
+  <form class="card" id="settings-form" autocomplete="off">
+    <h2 id="settings-h">SETTINGS</h2>
+    <p class="problem" id="settings-problem" hidden></p>
+    <fieldset>
+      <legend>Brain</legend>
+      <label class="choice" id="choice-local">
+        <input type="radio" name="engine" value="local">
+        <span><b>On this PC (Ollama)</b><small id="local-note">Private and works offline. Needs a good GPU for speed.</small></span>
+      </label>
+      <select id="local-model" aria-label="Local model"></select>
+      <label class="choice">
+        <input type="radio" name="engine" value="groq">
+        <span><b>Groq cloud</b><small>Fast on any PC. Your requests, and screenshots when Jarvis looks at the screen, are sent to Groq.</small></span>
+      </label>
+      <select id="groq-model" aria-label="Groq model"></select>
+    </fieldset>
+    <fieldset>
+      <legend>Groq API key</legend>
+      <div class="keyrow">
+        <input type="password" id="groq-key" placeholder="gsk_…" spellcheck="false" aria-label="Groq API key">
+        <button type="button" class="pill" id="key-save">Save key</button>
+      </div>
+      <p class="hint" id="key-status"></p>
+      <a href="#" data-url="https://console.groq.com/keys">Get a free key at console.groq.com/keys</a>
+      <p class="hint">The key is kept in the Windows Credential Manager, not in a file. Free keys have per-minute limits, and each Jarvis step uses a few thousand tokens.</p>
+    </fieldset>
+    <fieldset>
+      <legend>Speech-to-text</legend>
+      <label class="choice">
+        <input type="radio" name="stt" value="local">
+        <span><b>On this PC (Whisper)</b><small>Private. Fast with an NVIDIA GPU.</small></span>
+      </label>
+      <label class="choice" id="choice-stt-groq">
+        <input type="radio" name="stt" value="groq">
+        <span><b>Groq Whisper</b><small>Helps on PCs without an NVIDIA GPU. Your recordings are sent to Groq.</small></span>
+      </label>
+    </fieldset>
+    <div class="row">
+      <button type="submit" class="pill primary" id="settings-save">Save and restart</button>
+      <button type="button" class="pill" id="settings-cancel">Cancel</button>
+    </div>
+    <p class="hint" id="settings-status" role="status"></p>
+  </form>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const api = () => (window.pywebview && window.pywebview.api) || null;
+  const call = (name, ...args) => { const a = api(); if (a && a[name]) return a[name](...args); return Promise.resolve(null); };
+
+  // ------------------------------------------------------------------ ring
+  // Layers, back to front: halo, tilted orbits, orbiting particles, the
+  // strand ring, a radial equaliser, ripples, inner rings, core. Every layer
+  // eases toward its state's targets; speech and the mic drive them live.
+  const canvas = $("ring");
+  const ctx = canvas.getContext("2d");
+  const glow = document.createElement("canvas");
+  const gctx = glow.getContext("2d");
+  const STRANDS = 44, POINTS = 150, BARS = 96, PARTICLES = 150;
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const strands = Array.from({ length: STRANDS }, (_, i) => ({
+    p1: Math.random() * 6.28, p2: Math.random() * 6.28, p3: Math.random() * 6.28,
+    w: 0.55 + Math.random() * 0.9, off: (i / STRANDS - 0.5),
+  }));
+  const particles = Array.from({ length: PARTICLES }, () => ({
+    a: Math.random() * Math.PI * 2,
+    r: 0.55 + Math.random() * 0.9,          // orbit radius (x R)
+    tilt: 0.25 + Math.random() * 0.75,       // squash of the orbit (3D tilt)
+    rot: Math.random() * Math.PI,            // orbit's angle on screen
+    speed: (0.15 + Math.random() * 0.55) * (Math.random() < 0.5 ? -1 : 1),
+    size: 0.6 + Math.random() * 1.4,
+    flick: Math.random() * 6.28,
+  }));
+  const orbits = [
+    { tilt: 0.28, rot: 0.3, speed: 0.22, r: 1.18 },
+    { tilt: 0.42, rot: 2.1, speed: -0.17, r: 1.06 },
+    { tilt: 0.18, rot: 4.0, speed: 0.12, r: 1.30 },
+  ];
+  //            amp   speed alpha spin  hue  orbit parts bars  breathe
+  const PRESETS = {
+    boot:         { amp: 0.20, speed: 0.30, alpha: 0.05, spin: 0,   hue: 0,    orbit: 0.10, parts: 0.30, bars: 0,    breathe: 0.02 },
+    idle:         { amp: 0.30, speed: 0.45, alpha: 0.13, spin: 0,   hue: 0,    orbit: 0.12, parts: 0.40, bars: 0,    breathe: 0.025 },
+    listening:    { amp: 0.32, speed: 0.50, alpha: 0.15, spin: 0,   hue: 0,    orbit: 0.16, parts: 0.55, bars: 0.35, breathe: 0.02 },
+    transcribing: { amp: 0.55, speed: 1.20, alpha: 0.18, spin: 0.6, hue: 0.3,  orbit: 0.45, parts: 0.9,  bars: 0,    breathe: 0 },
+    thinking:     { amp: 0.55, speed: 1.50, alpha: 0.18, spin: 1,   hue: 0.7,  orbit: 0.85, parts: 1.4,  bars: 0,    breathe: 0 },
+    speaking:     { amp: 0.45, speed: 1.05, alpha: 0.20, spin: 0,   hue: 0.15, orbit: 0.35, parts: 1.0,  bars: 1,    breathe: 0 },
+    paused:       { amp: 0.12, speed: 0.18, alpha: 0.06, spin: 0,   hue: 0,    orbit: 0.05, parts: 0.15, bars: 0,    breathe: 0.03 },
+    error:        { amp: 0.65, speed: 1.60, alpha: 0.20, spin: 0,   hue: 0,    orbit: 0.3,  parts: 1.2,  bars: 0,    breathe: 0 },
+  };  // prettier-ignore
+  const now = { amp: 0.2, speed: 0.3, alpha: 0.0, spin: 0, hue: 0, orbit: 0, parts: 0.3, bars: 0, breathe: 0.02,
+                mic: 0, voice: 0, red: 0, energy: 0 };
+  let mode = "boot", t = 0, last = performance.now(), dpr = 1, cx = 0, cy = 0, R = 100;
+  let spinAngle = 0, orbitAngle = 0;
+  let micLevel = 0, voiceLevel = 0, levelAt = 0;
+  // Auto-gain: whatever level the voice arrives at, it uses the full range.
+  let voicePeak = 0.15, micPeak = 0.15, lastEnergy = 0;
+  const bands = new Float32Array(12), shownBands = new Float32Array(12);
+  const ripples = [];
+
+  function setLevel(kind, level, b) {
+    levelAt = performance.now();
+    if (kind === "voice") voiceLevel = level; else micLevel = level;
+    if (Array.isArray(b) && b.length) for (let i = 0; i < bands.length; i++) bands[i] = b[Math.min(i, b.length - 1)] || 0;
+  }
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = glow.width = Math.round(w * dpr);
+    canvas.height = glow.height = Math.round(h * dpr);
+    cx = w / 2; cy = h * 0.43;
+    R = Math.max(70, Math.min(w * 0.27, h * 0.25));
+  }
+  // Measure the canvas itself (the panel showing/hiding changes its width).
+  new ResizeObserver(resize).observe(canvas);
+  window.addEventListener("resize", () => layout());
+
+  const lerp = (a, b, k) => a + (b - a) * k;
+  function color(alpha, lift = 0) {
+    const h = now.hue, r = now.red;
+    const base = [0 + 120 * h, 229 - 9 * h, 204 + 51 * h];
+    const c = base.map((v, i) => Math.round(Math.min(255, lerp(v, [255, 90, 90][i], r) + lift)));
+    return `rgba(${c[0]},${c[1]},${c[2]},${Math.max(0, Math.min(1, alpha))})`;
+  }
+  // Spectrum value at an angle: low notes at the bottom, high at the top,
+  // mirrored left/right, gently rippling so it never looks static.
+  function bandAt(a) {
+    const u = (Math.cos(a - Math.PI / 2) + 1) / 2;  // 0 bottom .. 1 top
+    const x = u * (shownBands.length - 1);
+    const i = Math.floor(x), f = x - i;
+    const v = lerp(shownBands[i], shownBands[Math.min(i + 1, shownBands.length - 1)], f);
+    return v * (0.75 + 0.25 * Math.sin(a * 9 + t * 4));
+  }
+
+  function strandPath(c, s, amp, rr) {
+    const base = rr * (1 + s.off * 0.075);
+    c.beginPath();
+    for (let j = 0; j <= POINTS; j++) {
+      const a = (j / POINTS) * Math.PI * 2;
+      const n =
+        Math.sin(3 * a + s.p1 + t * 0.9 * s.w) * 0.36 +
+        Math.sin(5 * a - s.p2 - t * 1.3) * 0.24 +
+        Math.sin(7 * a + s.p3 + t * 1.7 * s.w) * 0.14 +
+        Math.sin(2 * a + t * 0.45 + s.p1) * 0.26;
+      const push = now.bars > 0.05 ? bandAt(a) * now.energy * 0.10 : 0;  // the voice bulges the ring
+      const r = base * (1 + push) + amp * rr * 0.13 * n;
+      const x = cx + r * Math.cos(a), y = cy + r * Math.sin(a);
+      j ? c.lineTo(x, y) : c.moveTo(x, y);
+    }
+    c.closePath();
+  }
+
+  // The loop never dies: the next frame is booked first, and nothing is drawn
+  // while the window has no size (minimized at start, a hidden page).
+  function frame(ms) {
+    requestAnimationFrame(frame);
+    try { draw(ms); } catch (e) { console.error("ring", e); }
+  }
+
+  function draw(ms) {
+    if (canvas.clientWidth && Math.round(canvas.clientWidth * dpr) !== canvas.width) resize();
+    if (!canvas.width || !canvas.height) { last = ms; return; }
+    const dt = Math.min(0.05, (ms - last) / 1000) * (reduced ? 0.3 : 1); last = ms;
+    const p = PRESETS[mode] || PRESETS.idle;
+    if (ms - levelAt > 400) { micLevel *= 0.9; voiceLevel *= 0.9; bands.fill(0); }
+    // Normalise speech and mic against their recent peaks.
+    voicePeak = Math.max(voiceLevel, voicePeak * 0.996, 0.08);
+    micPeak = Math.max(micLevel, micPeak * 0.996, 0.08);
+    const voiceN = Math.min(1, voiceLevel / voicePeak), micN = Math.min(1, micLevel / micPeak);
+    now.voice = lerp(now.voice, voiceN, 0.45);
+    now.mic = lerp(now.mic, micN, 0.4);
+    for (let i = 0; i < bands.length; i++) shownBands[i] = lerp(shownBands[i], bands[i], 0.35);
+    const live = mode === "speaking" ? now.voice : mode === "listening" ? now.mic * 0.8 : 0;
+    now.energy = lerp(now.energy, live, 0.5);
+    const k = 1 - Math.pow(0.0015, dt);
+    for (const key of ["spin", "hue", "orbit", "parts", "bars", "breathe"]) now[key] = lerp(now[key], p[key], k);
+    now.amp = lerp(now.amp, p.amp + now.energy * 1.6, k * 1.6);
+    now.speed = lerp(now.speed, p.speed + now.energy * 1.2, k);
+    now.alpha = lerp(now.alpha, p.alpha + now.energy * 0.08, k);
+    now.red = lerp(now.red, mode === "error" ? 1 : 0, k);
+    t += dt * now.speed;
+    spinAngle += dt * (0.4 + now.spin * 2.2);
+    orbitAngle += dt * (0.5 + now.parts * 0.8 + now.energy * 1.5);
+    // A syllable starting (a jump in loudness) sends a ripple outwards.
+    if (now.energy - lastEnergy > 0.18 && ripples.length < 6 && !reduced) ripples.push({ r: 1.0, a: 0.5 * now.energy + 0.2 });
+    lastEnergy = lerp(lastEnergy, now.energy, 0.25);
+    const breathe = 1 + now.breathe * Math.sin(ms / 1400);
+    const rr = R * breathe * (1 + now.energy * 0.07);
+
+    const W = canvas.width, H = canvas.height;
+    for (const c of [ctx, gctx]) { c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H); }
+
+    // Halo.
+    const halo = ctx.createRadialGradient(cx, cy, rr * 0.4, cx, cy, rr * 1.9);
+    halo.addColorStop(0, color(0.05 + now.energy * 0.10));
+    halo.addColorStop(1, color(0));
+    ctx.fillStyle = halo; ctx.fillRect(0, 0, W, H);
+
+    gctx.globalCompositeOperation = "lighter";
+
+    // Tilted orbits (3D rings), strongest while thinking.
+    if (now.orbit > 0.02) {
+      gctx.lineWidth = 1.2;
+      for (const o of orbits) {
+        const rot = o.rot + orbitAngle * o.speed * 2;
+        gctx.strokeStyle = color(now.orbit * 0.45);
+        gctx.beginPath();
+        gctx.ellipse(cx, cy, rr * o.r, rr * o.r * o.tilt, rot, 0, Math.PI * 2);
+        gctx.stroke();
+        // A bright bead running along each orbit.
+        const a = orbitAngle * 1.6 * Math.sign(o.speed) + o.rot * 3;
+        const ex = rr * o.r * Math.cos(a), ey = rr * o.r * o.tilt * Math.sin(a);
+        const bx = cx + ex * Math.cos(rot) - ey * Math.sin(rot), by = cy + ex * Math.sin(rot) + ey * Math.cos(rot);
+        gctx.fillStyle = color(now.orbit * 0.9, 30);
+        gctx.beginPath(); gctx.arc(bx, by, 2.4, 0, Math.PI * 2); gctx.fill();
+      }
+    }
+
+    // Orbiting particles; speech throws them outwards.
+    for (const q of particles) {
+      q.a += dt * q.speed * (0.4 + now.parts * 1.6 + now.energy * 2.2);
+      const out = 1 + now.energy * 0.35 * Math.sin(q.flick + t * 3);
+      const r = rr * q.r * out, rot = q.rot + orbitAngle * 0.05;
+      const ex = r * Math.cos(q.a), ey = r * q.tilt * Math.sin(q.a);
+      const x = cx + ex * Math.cos(rot) - ey * Math.sin(rot), y = cy + ex * Math.sin(rot) + ey * Math.cos(rot);
+      const tw = 0.5 + 0.5 * Math.sin(q.flick + ms / 300);
+      gctx.fillStyle = color((0.18 + 0.5 * now.parts * tw) * (0.4 + now.energy), 25);
+      const s = q.size * (1 + now.energy * 0.8);
+      gctx.fillRect(x - s / 2, y - s / 2, s, s);
+    }
+
+    // The strand ring.
+    gctx.lineWidth = 1.05;
+    gctx.strokeStyle = color(now.alpha);
+    for (const s of strands) { strandPath(gctx, s, now.amp, rr); gctx.stroke(); }
+
+    // Radial equaliser: the voice's spectrum around the ring.
+    if (now.bars > 0.02 && now.energy > 0.02) {
+      const inner = rr * 1.14;
+      gctx.lineWidth = Math.max(1.5, (Math.PI * 2 * inner) / BARS * 0.45);
+      gctx.lineCap = "round";
+      gctx.strokeStyle = color(0.25 + 0.55 * now.energy * now.bars, 20);
+      gctx.beginPath();
+      for (let i = 0; i < BARS; i++) {
+        const a = (i / BARS) * Math.PI * 2;
+        const len = rr * (0.02 + 0.30 * bandAt(a) * now.energy * now.bars);
+        gctx.moveTo(cx + inner * Math.cos(a), cy + inner * Math.sin(a));
+        gctx.lineTo(cx + (inner + len) * Math.cos(a), cy + (inner + len) * Math.sin(a));
+      }
+      gctx.stroke();
+    }
+
+    // Ripples.
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const w = ripples[i];
+      w.r += dt * 0.9; w.a -= dt * 0.7;
+      if (w.a <= 0) { ripples.splice(i, 1); continue; }
+      gctx.lineWidth = 1.5;
+      gctx.strokeStyle = color(w.a);
+      gctx.beginPath(); gctx.arc(cx, cy, rr * w.r, 0, Math.PI * 2); gctx.stroke();
+    }
+
+    // Bloom, then the sharp layer on top.
+    ctx.globalCompositeOperation = "lighter";
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.filter = "blur(14px)"; ctx.globalAlpha = 0.9; ctx.drawImage(glow, 0, 0);
+    ctx.filter = "blur(3px)"; ctx.globalAlpha = 0.8; ctx.drawImage(glow, 0, 0);
+    ctx.filter = "none"; ctx.globalAlpha = 1; ctx.drawImage(glow, 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // Inner rings: they pulse with the voice too.
+    const faint = 0.10 + now.alpha * 0.5;
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = color(faint * 0.9 + now.energy * 0.25);
+    ctx.beginPath(); ctx.arc(cx, cy, rr * (0.46 + now.energy * 0.04), 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = color(faint * 0.6 + now.energy * 0.2);
+    ctx.beginPath(); ctx.arc(cx, cy, rr * (0.30 - now.energy * 0.03), 0, Math.PI * 2); ctx.stroke();
+    // Thinking: sweeping arcs.
+    if (now.spin > 0.02) {
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = color(0.55 * now.spin);
+      ctx.beginPath(); ctx.arc(cx, cy, rr * 0.62, spinAngle, spinAngle + 1.1); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, rr * 0.62, spinAngle + Math.PI, spinAngle + Math.PI + 0.5); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, rr * 0.38, -spinAngle * 1.4, -spinAngle * 1.4 + 0.8); ctx.stroke();
+    }
+    // Tick ring outside, slowly turning.
+    ctx.strokeStyle = color(0.10 + now.alpha * 0.25);
+    ctx.lineWidth = 1;
+    const ticks = 120, outer = R * 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < ticks; i++) {
+      const a = (i / ticks) * Math.PI * 2 + spinAngle * 0.08;
+      const len = i % 10 === 0 ? 10 : 4;
+      ctx.moveTo(cx + outer * Math.cos(a), cy + outer * Math.sin(a));
+      ctx.lineTo(cx + (outer + len) * Math.cos(a), cy + (outer + len) * Math.sin(a));
+    }
+    ctx.stroke();
+    // Core: brightens and swells with speech.
+    const coreR = rr * (0.16 + now.energy * 0.08);
+    const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+    core.addColorStop(0, color(0.55 + now.energy * 0.45, 40));
+    core.addColorStop(1, color(0));
+    ctx.fillStyle = core;
+    ctx.beginPath(); ctx.arc(cx, cy, coreR, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = color(0.5 + now.energy * 0.4);
+    ctx.beginPath(); ctx.arc(cx, cy, rr * (0.07 + now.energy * 0.02), 0, Math.PI * 2); ctx.stroke();
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  // ------------------------------------------------------------- state & UI
+  const statusEl = $("status"), subEl = $("sub"), logEl = $("log"), bootEl = $("boot");
+  let ready = false, paused = false, wakeWord = "Hey Jarvis", showIgnored = false;
+  let lastStep = null, thinkingText = "";
+  let panelOpen = false, lastReply = "", lastReplyAt = 0;
+  // Speech-synced text: the reply in the panel and the subtitle under the
+  // ring fill in word by word as Jarvis says them.
+  let stream = null, say = null, speakingNow = false, replaying = false, revealTimer = 0;
+  const tokens = (text) => String(text || "").match(/\S+\s*/g) || [];
+  // Split the rendered text into word spans (formatting kept), all hidden.
+  function wordSpans(box) {
+    const spans = [], nodes = [];
+    const walk = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+    while (walk.nextNode()) nodes.push(walk.currentNode);
+    for (const node of nodes) {
+      const frag = document.createDocumentFragment();
+      for (const part of node.nodeValue.split(/(\s+)/)) {
+        if (!part) continue;
+        if (/^\s+$/.test(part)) { frag.appendChild(document.createTextNode(part)); continue; }
+        // One span per letter (a letter = a user-perceived character).
+        const w = document.createElement("span");
+        w.className = "w pending";
+        for (const letter of Array.from(part)) {
+          const ch = document.createElement("span");
+          ch.className = "ch pending"; ch.textContent = letter;
+          w.appendChild(ch); spans.push(ch);
+        }
+        frag.appendChild(w);
+      }
+      node.parentNode.replaceChild(frag, node);
+    }
+    return spans;
+  }
+  const caret = Object.assign(document.createElement("span"), { className: "caret" });
+  // Reveal letters up to ``upto``; the newest letters of one tick cascade.
+  function reveal(spans, upto, cls = "shown") {
+    let added = 0;
+    for (let i = 0; i < Math.min(upto, spans.length); i++) {
+      const ch = spans[i];
+      if (!ch.classList.contains("pending")) continue;
+      ch.classList.remove("pending");
+      ch.classList.add(cls);
+      ch.parentElement.classList.remove("pending");  // its word is on screen
+      ch.style.animationDelay = cls === "instant" ? "0ms" : `${Math.min(added, 12) * 22}ms`;
+      added++;
+    }
+    return added > 0;
+  }
+  function finishStream() {
+    clearTimeout(revealTimer);
+    if (!stream) return;
+    const { el, spans, meta } = stream;
+    reveal(spans, spans.length, "instant");
+    caret.remove();
+    el.classList.remove("streaming");
+    if (meta) { const m = document.createElement("div"); m.className = "meta"; m.textContent = meta; el.appendChild(m); }
+    stream = null;
+  }
+  function streamTick() {
+    if (!say) return;
+    const p = Math.min(1, (performance.now() - say.t0) / say.ms);
+    // Subtitle: the letters of this sentence said so far.
+    if (say.subSpans) reveal(say.subSpans, Math.max(1, Math.ceil(p * say.subSpans.length)));
+    // Panel: the same share of the reply as has been spoken.
+    if (stream) {
+      const frac = say.from + (say.to - say.from) * p;
+      const want = Math.min(stream.spans.length, Math.ceil(frac * stream.spans.length));
+      const near = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 80;
+      if (reveal(stream.spans, want)) {
+        const lastShown = stream.spans[Math.max(0, want - 1)];
+        if (lastShown) lastShown.after(caret);
+        if (near) logEl.scrollTop = logEl.scrollHeight;
+      }
+    }
+  }
+  setInterval(streamTick, 40);
+  // The conversation panel: closed unless opened; the choice is remembered.
+  function setPanel(open, remember = true) {
+    panelOpen = !!open;
+    document.body.classList.toggle("panel-open", panelOpen);
+    const btn = $("toggle-panel");
+    btn.setAttribute("aria-pressed", String(panelOpen));
+    btn.title = btn.ariaLabel = panelOpen ? "Hide the conversation" : "Show the conversation";
+    if (panelOpen) { btn.querySelector(".dot").hidden = true; logEl.scrollTop = logEl.scrollHeight; }
+    if (remember) call("set_pref", "panel_open", panelOpen);
+    if (mode === "listening" || mode === "paused") idle();  // reply moves to the panel
+  }
+
+  function setMode(m, label, sub, opts = {}) {
+    mode = m;
+    statusEl.textContent = label;
+    statusEl.classList.toggle("alert", !!opts.alert);
+    if (sub !== undefined) setSub(sub, opts.html);
+  }
+  function setSub(text, html) {
+    if (html) subEl.innerHTML = text; else subEl.textContent = text || "";
+  }
+  function idle() {
+    const recent = !panelOpen && lastReply && Date.now() - lastReplyAt < 30000;
+    if (paused) setMode("paused", "Paused", `Say “${wakeWord}”, or press the mic`);
+    else setMode("listening", "Listening", recent ? lastReply : "Just talk");
+  }
+
+  function esc(s) {
+    return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  // Small Markdown: paragraphs, bullet/numbered lists, **bold**, *italic*, `code`, links.
+  function md(src) {
+    const inline = (s) => esc(s)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" data-url="$2">$1</a>')
+      .replace(/(^|\s)(https?:\/\/[^\s<]+)/g, '$1<a href="$2" data-url="$2">$2</a>');
+    const out = []; let list = null;
+    for (const raw of String(src || "").split(/\n/)) {
+      const line = raw.trimEnd();
+      const bullet = line.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)$/);
+      if (bullet) {
+        const kind = /^\s*\d/.test(line) ? "ol" : "ul";
+        if (!list || list.kind !== kind) { if (list) out.push(`</${list.kind}>`); out.push(`<${kind}>`); list = { kind }; }
+        out.push(`<li>${inline(bullet[1])}</li>`);
+        continue;
+      }
+      if (list) { out.push(`</${list.kind}>`); list = null; }
+      if (line.trim()) out.push(`<p>${inline(line)}</p>`);
+    }
+    if (list) out.push(`</${list.kind}>`);
+    return out.join("");
+  }
+
+  function append(node) {
+    if (!panelOpen && node.classList.contains("msg")) $("toggle-panel").querySelector(".dot").hidden = false;
+    const nearBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 80;
+    logEl.appendChild(node);
+    while (logEl.children.length > 400) logEl.firstElementChild.remove();
+    if (nearBottom) logEl.scrollTop = logEl.scrollHeight;
+  }
+  function message(who, text, meta, cls = "") {
+    const el = document.createElement("div");
+    el.className = `msg ${who.toLowerCase()} ${cls}`;
+    el.innerHTML = `<div class="who">${who === "You" ? "YOU" : "JARVIS"}</div><div class="text">${who === "Jarvis" ? md(text) : esc(text)}</div>` +
+      (meta ? `<div class="meta">${esc(meta)}</div>` : "");
+    append(el);
+    return el;
+  }
+  function note(text, cls = "") {
+    const el = document.createElement("div");
+    el.className = `note ${cls}`; el.textContent = text; append(el);
+  }
+  function argText(args) {
+    const parts = [];
+    for (const [k, v] of Object.entries(args || {})) {
+      if (v === "" || v === null || v === undefined) continue;
+      parts.push(k === "action" || k === "query" || k === "contact" || k === "target" ? String(v) : `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`);
+    }
+    const s = parts.join(" · ");
+    return s.length > 80 ? s.slice(0, 77) + "…" : s;
+  }
+
+  function bootLine(text) {
+    if (ready || !text) return;
+    const el = document.createElement("div");
+    el.className = "ln"; el.textContent = text;
+    bootEl.appendChild(el);
+    while (bootEl.children.length > 7) bootEl.firstElementChild.remove();
+    setSub(text);
+  }
+
+  // ------------------------------------------------------------- events in
+  const handlers = {
+    log({ text }) { if (!ready) bootLine(text); },
+    ready(d) {
+      ready = true; bootEl.classList.add("done");
+      $("chip-model").innerHTML = `<b>${esc(d.model || "")}</b> · ${esc(d.engine || "")}`;
+      wakeWord = d.wake_word ? d.wake_word.replace(/\b\w/g, (c) => c.toUpperCase()) : wakeWord;
+      $("mic").disabled = !d.always;
+      if (!d.always) $("mic").title = "Jarvis waits for the wake word in this mode";
+      idle();
+    },
+    listening() { if (paused) { paused = false; syncMic(); } idle(); },
+    paused(d) { paused = true; if (d.wake_word) wakeWord = d.wake_word; syncMic(); idle(); },
+    mic({ level, bands }) { setLevel("mic", level, bands); },
+    voice({ level, bands }) { setLevel("voice", level, bands); },
+    transcribing() { setMode("transcribing", "Transcribing", ""); },
+    ignored({ text }) {
+      if (showIgnored) note(`not for me: ${text}`);
+      setSub(`(not for me) ${text}`);
+    },
+    heard({ text, typed }) {
+      if (paused && !typed) { paused = false; syncMic(); }
+      message("You", text, typed ? "typed" : "");
+      setMode("thinking", "Thinking", text);
+    },
+    thinking({ text }) { thinkingText = text; setMode("thinking", "Thinking", text); },
+    step(d) {
+      if (d.kind === "tool_start") {
+        const el = document.createElement("div");
+        el.className = "step";
+        el.innerHTML = `<span class="mark">▸</span><span><b>${esc(d.tool)}</b> ${esc(argText(d.args))}</span>`;
+        append(el); lastStep = el;
+        setSub(`<span class="tool">▸ ${esc(d.tool)}</span> ${esc(argText(d.args))}`, true);
+      } else if (d.kind === "tool_end" && lastStep) {
+        lastStep.querySelector(".mark").textContent = d.ok ? "✓" : "✗";
+        if (!d.ok) {
+          lastStep.classList.add("fail");
+          const why = document.createElement("span");
+          why.className = "why"; why.textContent = String(d.text || "").slice(0, 300);
+          lastStep.lastElementChild.appendChild(why);
+        }
+        lastStep = null;
+      } else if (d.kind === "plan" && Array.isArray(d.steps)) {
+        d.steps.forEach((s) => note(`plan: ${s}`));
+      }
+    },
+    reply({ text, seconds, heard_seconds, ok }) {
+      const meta = [heard_seconds ? `heard in ${heard_seconds}s` : "", seconds !== undefined ? `replied in ${seconds}s` : ""].filter(Boolean).join(" · ");
+      // With the conversation hidden, the answer stays under the ring a while.
+      lastReply = String(text || "").replace(/[*_`#>]/g, "").replace(/\s+/g, " ").trim();
+      lastReplyAt = Date.now();
+      finishStream();
+      if (replaying) { message("Jarvis", text, meta, ok === false ? "failed" : ""); return; }
+      // Shown as it's spoken; all at once if Jarvis doesn't speak it.
+      const el = message("Jarvis", text, "", ok === false ? "failed" : "");
+      el.classList.add("streaming");
+      stream = { el, text, meta, spans: wordSpans(el.querySelector(".text")) };
+      setMode("speaking", "Speaking", "");
+      revealTimer = setTimeout(() => { if (!speakingNow) finishStream(); }, 1500);
+    },
+    speaking() {
+      speakingNow = true;
+      if (statusEl.textContent !== "Confirm") setMode("speaking", "Speaking");
+    },
+    say(d) {
+      if (replaying) return;
+      const words = tokens(d.text);
+      let acc = 0;
+      const cum = words.map((w) => (acc += w.length));
+      const total = Math.max(1, d.total || acc);
+      // The subtitle: this sentence's words, each appearing as it's said.
+      subEl.textContent = String(d.text || "").trim();
+      subEl.classList.add("live");
+      say = {
+        words, cum, len: acc, t0: performance.now(), ms: Math.max(300, (d.seconds || 1) * 1000),
+        from: (d.start || 0) / total, to: ((d.start || 0) + String(d.text || "").length) / total,
+        subSpans: wordSpans(subEl),
+      };
+    },
+    // "Jarvis" heard mid-turn: stop showing the old reply, listen.
+    woken() {
+      say = null; finishStream(); subEl.classList.remove("live");
+      setMode("listening", "Listening", "Go ahead…");
+    },
+    spoken({ interrupted }) {
+      speakingNow = false; say = null; voiceLevel = 0;
+      finishStream(); subEl.classList.remove("live");
+      if (interrupted) note("stopped speaking");
+      idle();
+    },
+    interrupted() { note("stopped"); idle(); },
+    error({ text }) {
+      note(`error: ${text}`, "err");
+      setMode("error", "Error", text, { alert: true });
+      setTimeout(idle, 2500);
+    },
+    confirm({ question }) {
+      $("confirm-q").textContent = question;
+      $("confirm").classList.add("show");
+      setMode("speaking", "Confirm", "Say yes or no");
+    },
+    reminder({ text }) { note(`⏰ Reminder: ${text}`, "remind"); },
+    notice({ text }) { note(text, "err"); },
+    fatal({ text }) {
+      $("fatal-text").textContent = text || "Unknown error";
+      $("fatal").classList.add("show");
+      setMode("error", "Offline", "", { alert: true });
+    },
+    title({ text }) { document.title = text; },
+    setup({ text }) {
+      setMode("error", "Setup needed", text || "");
+      openSettings(text);
+    },
+  };
+  // The question card stays up while Jarvis asks it and listens for the answer.
+  const ENDS_CONFIRM = new Set(["step", "reply", "error", "interrupted", "heard", "fatal", "thinking"]);
+  function handle(kind, data) {
+    if (ENDS_CONFIRM.has(kind)) $("confirm").classList.remove("show");
+    const h = handlers[kind];
+    if (h) { try { h(data || {}); } catch (e) { console.error(kind, e); } }
+  }
+  window.__jarvis = (events) => { for (const [kind, data] of events) handle(kind, data); };
+
+  // ------------------------------------------------------------- controls
+  function syncMic() {
+    const mic = $("mic");
+    mic.classList.toggle("off", paused);
+    mic.title = paused ? "Resume always-listening" : "Pause listening (Jarvis then waits for the wake word)";
+    mic.setAttribute("aria-label", paused ? "Resume listening" : "Pause listening");
+  }
+  $("mic").addEventListener("click", () => {
+    paused = !paused; syncMic(); idle();
+    call("pause", paused);
+  });
+  $("stop").addEventListener("click", () => { call("stop"); voiceLevel = 0; });
+  $("input-wrap").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const text = $("cmd").value.trim();
+    if (!text) return;
+    $("cmd").value = "";
+    call("send", text);
+  });
+  document.querySelectorAll("#confirm [data-say]").forEach((b) =>
+    b.addEventListener("click", () => { call("send", b.dataset.say); $("confirm").classList.remove("show"); }));
+  $("clear").addEventListener("click", () => { logEl.innerHTML = ""; });
+  $("toggle-panel").addEventListener("click", () => setPanel(!panelOpen));
+  $("close-panel").addEventListener("click", () => setPanel(false));
+  $("show-ignored").addEventListener("click", (e) => {
+    showIgnored = !showIgnored; e.currentTarget.classList.toggle("on", showIgnored);
+  });
+  $("open-log").addEventListener("click", () => call("open_log"));
+  $("fatal-log").addEventListener("click", () => call("open_log"));
+  $("restart").addEventListener("click", () => call("restart"));
+  logEl.addEventListener("click", (e) => {
+    const a = e.target.closest("a[data-url]");
+    if (a) { e.preventDefault(); call("open_url", a.dataset.url); }
+  });
+  document.addEventListener("keydown", (e) => {
+    if ($("settings").classList.contains("show")) {
+      if (e.key === "Escape") $("settings").classList.remove("show");
+      return;  // typing in the settings, not a command
+    }
+    if (e.key === "Escape") { call("stop"); return; }
+    const typing = document.activeElement === $("cmd");
+    if (!typing && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) $("cmd").focus();
+  });
+
+  // ------------------------------------------------------------- settings
+  const form = $("settings-form");
+  let settingsData = null;
+  function fillSelect(select, values, chosen) {
+    const list = [...new Set([chosen, ...values].filter(Boolean))];
+    select.innerHTML = "";
+    for (const v of list) {
+      const o = document.createElement("option");
+      o.value = v; o.textContent = v; select.appendChild(o);
+    }
+    if (chosen) select.value = chosen;
+  }
+  function hint(id, text, cls = "") {
+    const el = $(id); el.textContent = text || ""; el.className = "hint" + (cls ? " " + cls : "");
+  }
+  function syncSettings() {
+    const groq = form.engine.value === "groq";
+    $("groq-model").disabled = !groq;
+    $("local-model").disabled = groq;
+    const keyed = !!(settingsData && settingsData.groq_key_saved);
+    const sttGroq = form.querySelector('input[name="stt"][value="groq"]');
+    sttGroq.disabled = !keyed;
+    $("choice-stt-groq").classList.toggle("disabled", !keyed);
+    if (!keyed && form.stt.value === "groq") form.stt.value = "local";
+  }
+  async function loadGroqModels() {
+    const models = await call("groq_models");
+    if (Array.isArray(models) && models.length) {
+      fillSelect($("groq-model"), models, $("groq-model").value || (settingsData && settingsData.groq_model));
+    }
+  }
+  async function openSettings(problem) {
+    const data = await call("settings");
+    if (!data) return;
+    settingsData = data;
+    form.engine.value = data.engine;
+    form.stt.value = data.stt;
+    fillSelect($("local-model"), data.ollama_models || [], data.local_model);
+    fillSelect($("groq-model"), [], data.groq_model);
+    $("local-note").textContent = data.ollama_installed
+      ? "Private and works offline. Needs a good GPU for speed."
+      : "Ollama isn't installed (get it from ollama.com), so this won't work yet.";
+    const why = problem || data.problem;
+    $("settings-problem").hidden = !why;
+    $("settings-problem").textContent = why || "";
+    hint("key-status", data.groq_key_saved ? "A key is saved." : "No key saved yet.", data.groq_key_saved ? "ok" : "");
+    hint("settings-status", "");
+    $("groq-key").value = "";
+    syncSettings();
+    $("settings").classList.add("show");
+    if (data.groq_key_saved) loadGroqModels();
+  }
+  form.addEventListener("change", syncSettings);
+  $("open-settings").addEventListener("click", () => openSettings());
+  $("settings-cancel").addEventListener("click", () => $("settings").classList.remove("show"));
+  $("settings").addEventListener("click", (e) => {
+    const a = e.target.closest("a[data-url]");
+    if (a) { e.preventDefault(); call("open_url", a.dataset.url); }
+  });
+  $("key-save").addEventListener("click", async () => {
+    const key = $("groq-key").value.trim();
+    if (!key) { hint("key-status", "Paste your key first.", "bad"); return; }
+    hint("key-status", "Checking the key with Groq…");
+    const r = await call("save_groq_key", key);
+    $("groq-key").value = "";  // never kept in the page
+    if (!r) return;
+    hint("key-status", r.message, r.ok ? "ok" : "bad");
+    if (r.ok) {
+      settingsData.groq_key_saved = true;
+      if (r.models && r.models.length) fillSelect($("groq-model"), r.models, $("groq-model").value);
+      if (form.engine.value !== "groq" && !settingsData.ollama_installed) form.engine.value = "groq";
+      syncSettings();
+    }
+  });
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    hint("settings-status", "Saving…");
+    const r = await call("save_settings", {
+      engine: form.engine.value, stt: form.stt.value,
+      groq_model: $("groq-model").value, local_model: $("local-model").value,
+    });
+    if (r) hint("settings-status", r.message, r.ok ? "ok" : "bad");
+  });
+
+  function layout() { document.body.classList.toggle("narrow", window.innerWidth < 860); }
+  function tick() {
+    const d = new Date();
+    $("clock").textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + "  ·  " +
+      d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  }
+  setInterval(tick, 15000); tick();
+
+  async function connect() {
+    const prefs = await call("prefs");
+    if (prefs && typeof prefs === "object") setPanel(!!prefs.panel_open, false);
+    const history = await call("history");
+    replaying = true;
+    try { if (Array.isArray(history)) window.__jarvis(history); } finally { replaying = false; }
+    finishStream();
+  }
+  window.addEventListener("pywebviewready", connect);
+  if (window.pywebview && window.pywebview.api) connect();
+
+  layout(); resize(); requestAnimationFrame(frame);
+  window.__jarvisFrame = draw;  // for checking frames by hand
+  // Demo when opened outside the app (a browser): shows the states in turn.
+  if (location.hash === "#demo") demo();
+  function demo() {
+    window.__jarvis([["ready", { engine: "ollama", model: "qwen3.5:4b", always: true, wake_word: "hey jarvis" }]]);
+    let v = 0; setInterval(() => { v += 0.3; window.__jarvis([["mic", { level: 0.2 + 0.3 * Math.abs(Math.sin(v)) }]]); }, 60);
+  }
+})();
+</script>
+</body>
+</html>

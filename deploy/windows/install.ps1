@@ -20,9 +20,9 @@
          openjarvis-rust extension is compiled from source in step 6.
       6. Run `uv sync --extra desktop --group desktop-native` so the FastAPI
          server, speech backend, and native extension are importable. With
-         voice enabled (-Voice, or "y" at the prompt) the `voice` (Kokoro
-         TTS) and `wakeword` ("Hey Jarvis") extras are added and espeak-ng
-         is installed via winget, so `jarvis listen` can talk back.
+         voice enabled (-Voice, or "y" at the prompt) the `voice`
+         (Chatterbox-Turbo TTS, CUDA PyTorch), `wakeword` ("Hey Jarvis") and
+         `agent` extras are added, so `jarvis listen` can talk back.
       7. Optionally register the scheduled-task service (see
          deploy/windows/jarvis-service.ps1).
 
@@ -37,7 +37,7 @@
       -SkipService    Don't prompt for / install the scheduled task.
       -Service        Install the scheduled task without prompting.
       -Force          Re-run all steps even if already done.
-      -Voice          Install voice mode (Kokoro TTS + wake word) without prompting.
+      -Voice          Install voice mode (Chatterbox TTS + wake word) without prompting.
       -SkipVoice      Don't prompt for / install voice mode.
 
     Under `irm | iex` the param block is unreachable (Invoke-Expression
@@ -390,30 +390,31 @@ Then re-run this installer.
 }
 
 # ---------------------------------------------------------------------------
-# 6. uv sync --extra desktop --group desktop-native [--extra voice --extra wakeword]
+# 6. uv sync --extra desktop --group desktop-native [--extra voice --extra wakeword --extra agent]
 # ---------------------------------------------------------------------------
 
 # The desktop extra only covers speech-to-text; without the voice extra
 # `jarvis chat --voice` can hear you but has no local voice to answer with
-# (#1211). Kokoro pulls in PyTorch, so it stays opt-in.
+# (#1211). Chatterbox pulls in CUDA PyTorch (~3 GB), so it stays opt-in.
 if ($Voice) {
     $installVoice = $true
 } elseif ($SkipVoice) {
     $installVoice = $false
 } elseif ([Environment]::UserInteractive -and -not [System.Console]::IsInputRedirected) {
-    $reply = Read-Host "Install voice mode (say 'Hey Jarvis', hear spoken replies; ~2 GB extra)? [y/N]"
+    $reply = Read-Host "Install voice mode (say 'Hey Jarvis', hear spoken replies; ~5 GB extra)? [y/N]"
     $installVoice = ($reply -match '^[yY]')
 } else {
     $installVoice = $false
 }
 
-$voiceNote = if ($installVoice) { ' --extra voice --extra wakeword' } else { '' }
+$voiceNote = if ($installVoice) { ' --extra voice --extra wakeword --extra agent' } else { '' }
 Write-Info "Running 'uv sync --extra desktop --group desktop-native$voiceNote' in $srcDir (this can take a few minutes)..."
 Push-Location $srcDir
 try {
     # `uv sync` is exact, so voice mode needs the full extra set in one call.
     if ($installVoice) {
-        & $uvExe sync --extra desktop --group desktop-native --extra voice --extra wakeword
+        # agent = the desktop agent `jarvis listen` uses (LangGraph, FastMCP, vision).
+        & $uvExe sync --extra desktop --group desktop-native --extra voice --extra wakeword --extra agent
     } else {
         & $uvExe sync --extra desktop --group desktop-native
     }
@@ -424,19 +425,6 @@ try {
     Pop-Location
 }
 Write-Ok "Dependencies installed"
-
-if ($installVoice) {
-    # Kokoro's English G2P falls back to espeak-ng for out-of-dictionary
-    # words. Best effort: voice still works for common words without it.
-    if (Get-Command espeak-ng -ErrorAction SilentlyContinue) {
-        Write-Ok "espeak-ng already installed"
-    } elseif (Install-WithWinget -WingetId 'eSpeak-NG.eSpeak-NG' -CommandName 'espeak-ng') {
-        Write-Ok "espeak-ng installed"
-    } else {
-        Write-Warn2 "espeak-ng not installed; rare words may be mispronounced."
-        Write-Warn2 "  Install it later with: winget install eSpeak-NG.eSpeak-NG"
-    }
-}
 
 # ---------------------------------------------------------------------------
 # 7. Ollama - install + start + wait for daemon

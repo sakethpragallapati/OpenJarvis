@@ -89,6 +89,16 @@ def _read_input(prompt: str = "You> ") -> Optional[str]:
         "Implies --voice. Needs the wakeword extra."
     ),
 )
+@click.option(
+    "--always",
+    "always_listen",
+    is_flag=True,
+    default=None,
+    help=(
+        "With --wake: listen all the time, no wake word needed (speech "
+        "that isn't a command or question for Jarvis is ignored)."
+    ),
+)
 @runtime_cli_options
 def chat(
     engine_key: str | None,
@@ -103,6 +113,7 @@ def chat(
     num_gpu: int | None,
     skip_runtime_panel: bool,
     wake_mode: bool = False,
+    always_listen: bool | None = None,
 ) -> None:
     """Start an interactive multi-turn chat session.
 
@@ -120,7 +131,7 @@ def chat(
       /history      — show conversation history
 
     Pass --voice to use microphone input (silence-detection) and hear responses
-    read back via text-to-speech (kokoro local or OpenAI TTS). Pass --wake for
+    read back via text-to-speech (local Chatterbox, or OpenAI TTS). Pass --wake for
     hands-free use: say the wake word, then the request (``jarvis listen``).
     """
     console = Console(stderr=True)
@@ -344,6 +355,20 @@ def chat(
         except Exception as exc:
             console.print(f"[red]Wake word unavailable: {escape(str(exc))}[/red]")
             sys.exit(1)
+    if agent is not None and hasattr(agent, "set_progress"):
+        from openjarvis.cli._assistant import progress_printer
+
+        agent.set_progress(progress_printer(console))
+    if (
+        voice_session is not None
+        and agent is not None
+        and hasattr(agent, "set_confirm")
+    ):
+        from openjarvis.cli._assistant import make_voice_confirm
+
+        # Risky actions (shutdown, deleting, force-closing) are confirmed by
+        # voice instead of a y/N prompt nobody is looking at.
+        agent.set_confirm(make_voice_confirm(console, voice_session))
     if voice_session is not None:
         from openjarvis.cli._assistant import warm_up
 
@@ -356,7 +381,27 @@ def chat(
     announcer = ReminderAnnouncer(console, speak_aloud=voice_mode).start()
 
     # Print banner
-    if detector is not None:
+    always = bool(
+        detector is not None
+        and (
+            always_listen
+            if always_listen is not None
+            else getattr(config.speech, "listen_mode", "wake") == "always"
+        )
+    )
+    listener = None
+    if always:
+        from openjarvis.cli._assistant import AlwaysListener
+
+        listener = AlwaysListener()
+    if always:
+        voice_hint = (
+            "  [magenta]Always listening[/magenta] — just talk; commands and "
+            "questions for Jarvis are answered, other speech is ignored. Say "
+            "'Jarvis, pause' to switch to the wake word, 'stop listening' or "
+            "Ctrl-C to quit.\n"
+        )
+    elif detector is not None:
         voice_hint = (
             f"  [magenta]Hands-free mode[/magenta] — say "
             f"'{escape(detector.label)}', then your request. Press any key or "
@@ -431,15 +476,45 @@ def chat(
         history.append(Message(role=Role.SYSTEM, content=system_prompt))
 
     # REPL loop
+    from openjarvis.core import live
+
+    live.emit(
+        "ready",
+        engine=str(engine_name),
+        model=str(model),
+        agent=str(agent_key or "direct"),
+        always=bool(listener is not None),
+        wake_word=getattr(detector, "label", "") if detector is not None else "",
+    )
     skip_wake = False
     follow_up_seconds = 0.0
+    # Said right after "Jarvis" while it was busy: the next request.
+    pending_request: Optional[str] = None
     while True:
         for note in _notifications.diff(get_status()):
             console.print(f"[dim cyan]{note}[/dim cyan]")
 
-        if voice_mode:
+        if voice_mode and listener is None:
+            live.take_pause_request()  # only always-listening can pause
+        typed = live.take_typed() if voice_mode else None
+        if pending_request:
+            user_input, pending_request = pending_request, None
+            live.emit("heard", text=user_input)
+            console.print(f"[bold]You (voice):[/bold] {escape(user_input)}")
+        elif typed is not None:
+            # Typed in the JARVIS window: always meant for Jarvis.
+            live.emit("heard", text=typed, typed=True)
+            console.print(f"[bold]You (typed):[/bold] {escape(typed)}")
+            user_input = typed
+        elif voice_mode:
             assert voice_session is not None
-            if detector is not None:
+            if listener is not None and not skip_wake:
+                from openjarvis.cli._assistant import listen_always
+
+                result = listen_always(
+                    console, voice_session, detector, announcer, listener
+                )
+            elif detector is not None:
                 from openjarvis.cli._assistant import wait_for_wake_command
 
                 result = wait_for_wake_command(
@@ -476,6 +551,9 @@ def chat(
             console.print("[dim]Goodbye![/dim]")
             break
         elif cmd == "/clear":
+            reset = getattr(agent, "reset", None)
+            if callable(reset):
+                reset()
             history = []
             if system_prompt:
                 history.append(Message(role=Role.SYSTEM, content=system_prompt))
@@ -552,9 +630,23 @@ def chat(
             except Exception:
                 logger.debug("Failed to inject memory context", exc_info=True)
 
+        # Calling Jarvis by name interrupts this turn: the work, or the reply.
+        interrupter = None
+        if voice_mode and detector is not None and config.speech.wake_word_barge_in:
+            from openjarvis.cli._assistant import Interrupter
+
+            assert voice_session is not None
+            try:
+                interrupter = Interrupter(detector, voice_session).start()
+            except Exception:
+                logger.debug("No interruptions this turn", exc_info=True)
+
         # Generate response even when optional memory context is unavailable.
         try:
             reply_started = time.perf_counter()
+            live.emit("thinking", text=user_input)
+            if interrupter is not None:
+                interrupter.working(True)
             if agent is not None:
                 from openjarvis.agents._stubs import AgentContext
 
@@ -580,7 +672,19 @@ def chat(
                     else str(result)
                 )
 
+            if interrupter is not None:
+                interrupter.working(False)
             reply_seconds = time.perf_counter() - reply_started
+            steps_done = getattr(response, "tool_results", None) if agent else None
+            live.emit(
+                "reply",
+                text=content,
+                seconds=round(reply_seconds, 1),
+                heard_seconds=round(
+                    getattr(voice_session, "last_stt_seconds", 0.0) or 0.0, 1
+                ),
+                ok=all(getattr(t, "success", True) for t in (steps_done or [])),
+            )
             history.append(Message(role=Role.ASSISTANT, content=content))
             console.print()
             console.print(Markdown(content))
@@ -593,19 +697,22 @@ def chat(
             console.print()
             if voice_mode:
                 assert voice_session is not None
-                if detector is not None and config.speech.wake_word_barge_in:
-                    from openjarvis.speech.wake_word import BargeIn
-
-                    # Saying the wake word mid-reply stops it and goes
-                    # straight to recording the next request.
-                    with BargeIn(detector) as barge:
-                        finished = speak(
-                            content, console, voice_session, should_stop=barge.heard
-                        )
-                    skip_wake = barge.heard()
-                else:
-                    finished = speak(content, console, voice_session)
-                if detector is not None and finished and not skip_wake:
+                # "Jarvis" mid-reply stops it (the request said after the
+                # name is handled next, below).
+                finished = speak(
+                    content,
+                    console,
+                    voice_session,
+                    should_stop=interrupter.heard.is_set if interrupter else None,
+                )
+                if listener is not None:
+                    # Follow-ups now count as the same conversation; after a
+                    # failed step the next sentence is taken as the correction.
+                    steps = getattr(response, "tool_results", None) or []
+                    listener.replied(
+                        content, ok=all(getattr(t, "success", True) for t in steps)
+                    )
+                elif detector is not None and finished and not skip_wake:
                     # Conversation mode: a follow-up needs no wake word.
                     follow_up_seconds = float(config.speech.follow_up_seconds or 0)
 
@@ -616,9 +723,25 @@ def chat(
                 source="cli.chat",
             )
         except KeyboardInterrupt:
+            live.emit("interrupted")
             console.print("\n[dim]Generation interrupted.[/dim]")
         except Exception as exc:
+            live.emit("error", text=str(exc))
             console.print(f"\n[red]Error: {exc}[/red]\n")
+        finally:
+            if interrupter is not None:
+                interrupter.close()
+
+        if interrupter is not None and interrupter.heard.is_set():
+            # "Jarvis, <new request>": do that next. Just "Jarvis": listen
+            # for it now. "Jarvis, stop": nothing more.
+            said = interrupter.request(console)
+            if said:
+                pending_request = said
+            elif said == "":
+                skip_wake = True
+            if listener is not None:
+                listener.replied()
 
     announcer.stop()
     if memory_service is not None:

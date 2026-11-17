@@ -108,13 +108,41 @@ desktop = [
     "sounddevice>=0.5",
     "soundfile>=0.12",
 ]
-# Local neural TTS. Kokoro pulls spacy/misaki for G2P; espeak-ng must also be
-# present on PATH (brew install espeak-ng) for out-of-dictionary words.
+# Local neural TTS: Chatterbox-Turbo (350M parameters, voice cloning). Fast on
+# an NVIDIA GPU; on Windows uv installs the CUDA build of PyTorch for it (see
+# [tool.uv.sources]). The weights (~1.5 GB) download on first use.
 voice = [
-    "kokoro>=0.9",
+    "chatterbox-tts>=0.1.7",
+    "librosa>=0.11",
     "soundfile>=0.12",
     "sounddevice>=0.5",  # play_wav / record_until_silence in speech/voice_io.py
     "numpy>=1.24",
+]
+# The small CPU-friendly alternative (Kokoro-82M, tts_backend = "kokoro").
+# It pulls spacy/misaki for G2P; espeak-ng must also be on PATH (brew install
+# espeak-ng) for out-of-dictionary words.
+voice-kokoro = [
+    "kokoro>=0.9",
+    "soundfile>=0.12",
+    "sounddevice>=0.5",
+    "numpy>=1.24",
+]
+# Agentic desktop control for `jarvis listen` (the `desktop` agent): LangGraph
+# agent loop, FastMCP tool server, screenshots for vision, and Windows UI
+# Automation for clicking buttons/links by name.
+agent = [
+    "langgraph>=1.0",
+    "langgraph-checkpoint-sqlite>=2.0",
+    "fastmcp>=2.12",
+    "pillow>=10",
+    "uiautomation>=2.0.20; sys_platform == 'win32'",
+    "comtypes>=1.4; sys_platform == 'win32'",
+    "psutil>=5.9",
+    # Gmail MCP server (official Gmail API; your own OAuth client)
+    "google-api-python-client>=2.100",
+    "google-auth-oauthlib>=1.2",
+    # The JARVIS window (`jarvis-app.exe`): Edge WebView2 through pywebview
+    "pywebview>=5; sys_platform == 'win32'",
 ]
 openhands = ["openhands-sdk>=1.0; python_version >= '3.12'"]
 # Apple Foundation Models (on-device AFM 3). Needs an Apple Silicon Mac on
@@ -223,6 +251,10 @@ Issues = "https://github.com/open-jarvis/OpenJarvis/issues"
 jarvis = "openjarvis.cli:main"
 openjarvis-eval = "openjarvis.evals.cli:main"
 
+# The JARVIS window (no console): `.venv\Scripts\jarvis-app.exe`.
+[project.gui-scripts]
+jarvis-app = "openjarvis.hud.app:main"
+
 # Version is derived from git tags by hatch-vcs (see #526). For source/editable
 # checkouts this yields the true `git describe` version (e.g. 1.0.3.dev109+g<sha>)
 # rather than a stale static string. CI release builds override this with
@@ -247,8 +279,34 @@ git_describe_command = [
 # Such builds can inject the real version via SETUPTOOLS_SCM_PRETEND_VERSION.
 fallback_version = "0.0.0+unknown"
 
+[tool.uv]
+# chatterbox-tts pins exact, old versions: torch 2.6 has no kernels for
+# RTX 50-series GPUs, numpy<2 and transformers 5.2 would hold back the rest
+# of the project, and gradio/pkuseg/pykakasi are only for its demo UI and
+# Chinese/Japanese voices. Resolve those to current releases instead.
+override-dependencies = [
+    "torch>=2.7",
+    "torchaudio>=2.7",
+    "transformers>=5.2,<6",
+    "numpy>=1.24,<2.3",
+    "safetensors>=0.5.3",
+    "diffusers>=0.29",
+    "gradio; sys_platform == 'never'",
+    "spacy-pkuseg; sys_platform == 'never'",
+    "pykakasi; sys_platform == 'never'",
+]
+
+[[tool.uv.index]]
+# CUDA 12.8 PyTorch (RTX 50-series support; its cuBLAS/cuDNN are the CUDA 12
+# libraries faster-whisper's GPU path also uses).
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
 [tool.uv.sources]
 openjarvis-rust = { path = "rust/crates/openjarvis-python" }
+torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]
+torchaudio = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]
 
 [tool.hatch.build.targets.sdist]
 # Tauri release bundles carry these executables; Python source distributions

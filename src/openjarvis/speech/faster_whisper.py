@@ -12,6 +12,57 @@ from openjarvis.speech._stubs import Segment, SpeechBackend, TranscriptionResult
 
 logger = logging.getLogger(__name__)
 
+# CTranslate2's CUDA path needs cuBLAS 12 and cuDNN 9, which pip doesn't put
+# on PATH. A CUDA 12 PyTorch wheel ships exactly those DLLs in torch/lib, as
+# do the nvidia-cublas-cu12 / nvidia-cudnn-cu12 wheels.
+_CUDA_DLL = "cublas64_12.dll"
+CUDA_DLL_DIRS: List[str] = []
+
+
+def _cuda_dll_dirs() -> List[str]:
+    """Folders in this environment that hold cuBLAS 12 / cuDNN 9 DLLs."""
+    import importlib.util
+    from pathlib import Path
+
+    found: List[str] = []
+    candidates = []
+    try:
+        spec = importlib.util.find_spec("torch")  # locates it without importing
+    except (ImportError, ValueError):
+        spec = None
+    if spec is not None and spec.origin:
+        candidates.append(Path(spec.origin).parent / "lib")
+    try:
+        nvidia = importlib.util.find_spec("nvidia")
+    except (ImportError, ValueError):
+        nvidia = None
+    for root in getattr(nvidia, "submodule_search_locations", None) or []:
+        for sub in ("cublas", "cudnn", "cuda_runtime"):
+            candidates.append(Path(root) / sub / "bin")
+    for folder in candidates:
+        if (folder / _CUDA_DLL).is_file() or any(folder.glob("cudnn64_*.dll")):
+            found.append(str(folder))
+    return found
+
+
+def _register_cuda_dlls() -> None:
+    if os.name != "nt" or CUDA_DLL_DIRS:
+        return
+    for folder in _cuda_dll_dirs():
+        try:
+            os.add_dll_directory(folder)
+        except OSError:
+            continue
+        # CTranslate2 loads cuBLAS/cuDNN lazily with a plain LoadLibrary,
+        # which searches PATH rather than the add_dll_directory list.
+        os.environ["PATH"] = folder + os.pathsep + os.environ.get("PATH", "")
+        CUDA_DLL_DIRS.append(folder)
+    if CUDA_DLL_DIRS:
+        logger.debug("CUDA DLLs for faster-whisper: %s", CUDA_DLL_DIRS)
+
+
+_register_cuda_dlls()
+
 # On Windows, CTranslate2 loads its bundled DLLs at import time, so a broken
 # install (or a path over MAX_PATH) raises OSError rather than ImportError.
 # Treat both as "backend unavailable" instead of breaking every speech import.
@@ -141,8 +192,17 @@ class FasterWhisperBackend(SpeechBackend):
         *,
         format: str = "wav",
         language: Optional[str] = None,
+        hotwords: Optional[str] = None,
+        short_utterance: bool = False,
+        vad_filter: bool = True,
     ) -> TranscriptionResult:
-        """Transcribe audio bytes using Faster-Whisper."""
+        """Transcribe audio bytes using Faster-Whisper.
+
+        ``hotwords`` biases spelling toward known names ("VS Code", not
+        "V's code"). ``short_utterance`` tunes decoding for a spoken command:
+        no conditioning on earlier text, no timestamps, and (``vad_filter``)
+        Silero VAD to drop silence/noise that Whisper would hallucinate on.
+        """
         try:
             model = self._ensure_model()
 
@@ -156,9 +216,16 @@ class FasterWhisperBackend(SpeechBackend):
                 with tmp:
                     tmp.write(audio)
 
-                kwargs = {}
+                kwargs: dict = {}
                 if language:
                     kwargs["language"] = language
+                if hotwords:
+                    kwargs["hotwords"] = hotwords
+                if short_utterance:
+                    kwargs["condition_on_previous_text"] = False
+                    kwargs["without_timestamps"] = True
+                    if vad_filter:
+                        kwargs["vad_filter"] = True
 
                 try:
                     segments_iter, info = model.transcribe(tmp.name, **kwargs)

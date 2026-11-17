@@ -477,11 +477,24 @@ class LemonadeEngineConfig:
     host: str = "http://localhost:13305"
 
 
+@dataclass(slots=True)
+class GroqEngineConfig:
+    """Groq's hosted models (cloud). The API key is not kept here: it's in
+    the Windows Credential Manager (set it in the JARVIS window's settings)
+    or the GROQ_API_KEY environment variable."""
+
+    host: str = "https://api.groq.com/openai"
+    # The model Jarvis uses when engine.default = "groq" (default_model is
+    # the local one). qwen3.8-27b takes tools and images (screen vision).
+    model: str = "qwen/qwen3.8-27b"
+
+
 @dataclass
 class EngineConfig:
     """Inference engine settings with nested per-engine configs."""
 
     default: str = "ollama"
+    groq: GroqEngineConfig = field(default_factory=GroqEngineConfig)
     ollama: OllamaEngineConfig = field(default_factory=OllamaEngineConfig)
     vllm: VLLMEngineConfig = field(default_factory=VLLMEngineConfig)
     sglang: SGLangEngineConfig = field(default_factory=SGLangEngineConfig)
@@ -1635,10 +1648,13 @@ class SpeechConfig:
     # Text-to-speech. ``voice_id`` is interpreted by ``tts_backend`` only --
     # voice IDs are not portable between backends, so if voice output falls
     # back to a different backend that backend's own default voice is used.
+    # Chatterbox (local, GPU, voice cloning) IDs: "default", a name from
+    # ~/.openjarvis/voices/<name>.wav, or a path to a 5-30 s clip to clone.
     # Kokoro IDs: bm_george / bm_lewis (British male), bf_emma / bf_isabella
     # (British female), af_* / am_* (American).
-    tts_backend: str = "kokoro"  # "kokoro", "openai_tts", "cartesia", "elevenlabs"
-    voice_id: str = "bm_george"
+    # "chatterbox", "kokoro", "openai_tts", "cartesia", "elevenlabs"
+    tts_backend: str = "chatterbox"
+    voice_id: str = "jarvis"
     voice_speed: float = 1.0
     # Microphone level that counts as speech. 0 = measure the room's
     # background noise when voice mode starts and derive it from that.
@@ -1655,6 +1671,19 @@ class SpeechConfig:
     # After a spoken reply, listen this long for a follow-up without the
     # wake word (`jarvis listen`). 0 = always require the wake word.
     follow_up_seconds: float = 0.0
+    # `jarvis listen`: "wake" = say "Hey Jarvis" first; "always" = just talk
+    # (commands always count, questions when they name Jarvis or continue a
+    # conversation; other speech is ignored).
+    listen_mode: str = "wake"
+    # Extra names Whisper should spell right, comma-separated ("Valorant,
+    # Priya, OBS Studio"); added to built-in app names (VS Code, YouTube...).
+    vocabulary: str = ""
+    # Skip silence/background noise before decoding (fewer phantom phrases
+    # like "Thanks for watching" from a video playing nearby).
+    vad_filter: bool = True
+    # Prime recognition with your contacts' names (starred and recent chats
+    # first) and repair names it splits or garbles ("on and" -> "Anand").
+    contact_hints: bool = True
 
 
 @dataclass(slots=True)
@@ -1667,6 +1696,51 @@ class PowerConfig:
     battery_model: str = ""
     # Warn when free GPU memory drops below this before loading models.
     low_vram_warning_mb: int = 1024
+
+
+@dataclass(slots=True)
+class DesktopConfig:
+    """The ``desktop`` agent used by ``jarvis listen`` (LangGraph + FastMCP)."""
+
+    # Handle simple commands ("open Task Manager", "volume 30") without the
+    # language model: well under a second instead of several.
+    fast_path: bool = True
+    # For a one-step request, speak the tool's own confirmation instead of
+    # asking the model to phrase it (saves one model call).
+    auto_finish: bool = True
+    # Screen vision through the chat model (qwen3.5 reads images) or a
+    # separate Ollama vision model.
+    vision: bool = True
+    vision_model: str = ""
+    # Email drafts open in "gmail" (web) or "default" (mailto: mail app).
+    email_client: str = "gmail"
+    # Alarms are Task Scheduler alarms (`jarvis alarm`): they ring even if
+    # Jarvis is closed and can wake the PC. Voice that announces them
+    # ("male", "female", "none") and default early warning in minutes.
+    alarm_voice: str = "male"
+    alarm_advance_minutes: int = 0
+    # Experimental: write a step plan (one extra model call) before requests
+    # with several parts. Off by default: with qwen3.5:4b, plans named tools
+    # that don't exist and led the agent astray more often than they helped.
+    plan: bool = False
+    max_steps: int = 12
+    temperature: float = 0.3
+    max_tokens: int = 400
+    # Conversation messages (incl. tool calls/results) sent to the model.
+    history_messages: int = 32
+    # Long-term memory database; empty = ~/.openjarvis/desktop/memory.sqlite
+    memory_path: str = ""
+    # Extra MCP servers for the agent, as JSON: {"name": {"command": "npx",
+    # "args": [...]}} or {"name": {"url": "http://..."}}. [tools.mcp]
+    # servers are added too.
+    mcp_servers: str = ""
+    # Files go through the official MCP filesystem server, limited to your
+    # Desktop, Documents, Downloads, Pictures, Music and Videos. More
+    # folders, separated by ";", e.g. "D:\\Games;E:\\Projects".
+    file_folders: str = ""
+    # Where "write me a program" saves files (opened in VS Code).
+    # Empty = Desktop\Jarvis Code.
+    code_dir: str = ""
 
 
 @dataclass(slots=True)
@@ -1824,6 +1898,7 @@ class JarvisConfig:
     operators: OperatorsConfig = field(default_factory=OperatorsConfig)
     speech: SpeechConfig = field(default_factory=SpeechConfig)
     power: PowerConfig = field(default_factory=PowerConfig)
+    desktop: DesktopConfig = field(default_factory=DesktopConfig)
     optimize: OptimizeConfig = field(default_factory=OptimizeConfig)
     agent_manager: AgentManagerConfig = field(default_factory=AgentManagerConfig)
     memory_files: MemoryFilesConfig = field(default_factory=MemoryFilesConfig)
@@ -2155,6 +2230,7 @@ def load_config(path: Optional[Path] = None) -> JarvisConfig:
             "operators",
             "speech",
             "power",
+            "desktop",
             "optimize",
             "agent_manager",
             "digest",

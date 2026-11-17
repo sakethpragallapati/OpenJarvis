@@ -30,6 +30,11 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.agents.desktop  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.agents.native_openhands  # noqa: F401
 except ImportError:
     pass

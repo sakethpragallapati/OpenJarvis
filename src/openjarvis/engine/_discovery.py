@@ -73,6 +73,11 @@ def _make_engine(key: str, config: JarvisConfig) -> InferenceEngine:
             ollama_kwargs["keep_alive"] = cfg.keep_alive
         return cls(**ollama_kwargs)
 
+    # groq: Groq's hosted API (the key comes from openjarvis.core.secrets)
+    if key == "groq":
+        cfg = config.engine.groq
+        return cls(host=cfg.host or None)
+
     host_attr = _HOST_MAP.get(key)
     if host_attr is not None:
         host = getattr(config.engine, host_attr, None)

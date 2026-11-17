@@ -77,7 +77,7 @@ class VoiceSession:
     def warm_up(self) -> list[str]:
         """Load speech-to-text and the voice now instead of on first use.
 
-        Loading Kokoro takes 10+ s and Whisper a few seconds; doing it lazily
+        Loading the voice model takes 10-40 s and Whisper a few seconds; doing it lazily
         made the first reply take that long to be heard. Returns problems.
         """
         problems: list[str] = []
@@ -85,11 +85,16 @@ class VoiceSession:
             stt = self.get_stt_backend()
             if stt is None:
                 problems.append("no speech-to-text backend")
+            elif getattr(stt, "cloud", False):
+                pass  # nothing to load, and a test decode would be a paid call
             else:
                 from openjarvis.speech.voice_io import _frames_to_wav
 
                 # A first decode initializes the CTranslate2 kernels too.
-                stt.transcribe(_frames_to_wav([bytes(3200)], 16000), format="wav")
+                silence = _frames_to_wav([bytes(3200)], 16000)
+                stt.transcribe(silence, format="wav")
+                if self.stt_options(stt):  # also load the VAD model now
+                    stt.transcribe(silence, format="wav", **self.stt_options(stt))
         except Exception as exc:
             problems.append(f"speech-to-text: {exc}")
         try:
@@ -149,6 +154,71 @@ class VoiceSession:
             self._stt_backend = get_speech_backend(config)
             self._stt_resolved = True
         return self._stt_backend
+
+    def _speech_config(self) -> Any:
+        from openjarvis.core.config import load_config
+
+        config = self._config if self._config is not None else load_config()
+        return config.speech
+
+    def vocabulary(self) -> list[str]:
+        from openjarvis.speech.vocabulary import vocabulary
+
+        return vocabulary(getattr(self._speech_config(), "vocabulary", "") or "")
+
+    def stt_options(self, backend: Any) -> dict[str, Any]:
+        """Command-tuned decoding + name hints, for backends that take them."""
+        backend_id = getattr(backend, "backend_id", "")
+        if backend_id not in ("faster-whisper", "groq"):
+            return {}
+        from openjarvis.speech.vocabulary import hotwords
+
+        speech = self._speech_config()
+        # Your own words first, then the built-in app names, then contacts.
+        own = [
+            w.strip()
+            for w in str(getattr(speech, "vocabulary", "") or "").split(",")
+            if w.strip()
+        ]
+        room = max(0, 320 - len(", ".join(own)))
+        base = hotwords("", limit_chars=room) if room > 40 else ""
+        hints = ", ".join([*own, base] if base else own)
+        people = self.contact_hints()
+        if people:
+            hints = f"{hints}, {', '.join(people)}" if hints else ", ".join(people)
+        if backend_id == "groq":
+            return {"hotwords": hints}  # sent as Whisper's spelling prompt
+        return {
+            "hotwords": hints,
+            "short_utterance": True,
+            "vad_filter": bool(getattr(speech, "vad_filter", True)),
+        }
+
+    def contact_hints(self) -> list[str]:
+        """Contact names to prime recognition with (Indian names like
+        "Anand", "Thrisha" come out as "armed", "on and" without them)."""
+        if not bool(getattr(self._speech_config(), "contact_hints", True)):
+            return []
+        try:
+            from openjarvis.desktop.contacts import directory
+
+            return directory().hint_names(limit_chars=300)
+        except Exception:
+            return []
+
+    def correct(self, text: str) -> str:
+        """Fix near-misses of known names; '' for Whisper phantom phrases."""
+        from openjarvis.speech.vocabulary import correct_transcript
+
+        text = correct_transcript(text, self.vocabulary())
+        if text and bool(getattr(self._speech_config(), "contact_hints", True)):
+            try:
+                from openjarvis.desktop.contacts import repair_names
+
+                text = repair_names(text)
+            except Exception:
+                pass
+        return text
 
     def get_stt_language(self) -> Optional[str]:
         """Return the configured ``speech.language``, or None to auto-detect."""
@@ -224,8 +294,12 @@ def record_voice(
     *,
     audio: bytes | None = None,
     follow_up_seconds: float | None = None,
+    quiet: bool = False,
 ) -> Optional[str] | object:
     """Record from mic, transcribe, and return text or a loop sentinel.
+
+    ``quiet`` prints nothing about the utterance (always-listening mode
+    decides afterwards whether it was meant for Jarvis).
 
     ``audio`` transcribes an utterance already recorded (e.g. on the
     wake-word stream). ``follow_up_seconds`` listens quietly for that long
@@ -273,18 +347,26 @@ def record_voice(
     if not audio_bytes:
         return None  # nobody started speaking
 
-    console.print("[dim]Transcribing…[/dim]")
+    from openjarvis.core import live
+
+    live.emit("transcribing")
+    if not quiet:
+        console.print("[dim]Transcribing…[/dim]")
     started = time.perf_counter()
     try:
         result = backend.transcribe(
-            audio_bytes, format="wav", language=active_session.get_stt_language()
+            audio_bytes,
+            format="wav",
+            language=active_session.get_stt_language(),
+            **active_session.stt_options(backend),
         )
         active_session.last_stt_seconds = time.perf_counter() - started
-        text = result.text.strip()
+        text = active_session.correct(result.text.strip())
         if text:
-            console.print(f"[bold]You (voice):[/bold] {_terminal_safe_text(text)}")
+            if not quiet:
+                console.print(f"[bold]You (voice):[/bold] {_terminal_safe_text(text)}")
             return text
-        if follow_up_seconds is None:
+        if follow_up_seconds is None and not quiet:
             console.print("[dim]Nothing heard — try again.[/dim]")
         return None
     except Exception as exc:
@@ -292,39 +374,46 @@ def record_voice(
         return None
 
 
-_CODE_BLOCK = re.compile(r"```.*?(?:```|$)", re.DOTALL)
-_INLINE_CODE = re.compile(r"`([^`]*)`")
-_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
-_BARE_URL = re.compile(r"https?://\S+")
-_LINE_MARKER = re.compile(
-    r"^\s{0,3}(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s?)", re.MULTILINE
-)
-_EMPHASIS = re.compile(r"(\*\*|__|\*|~~)")
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+|\n+")
 # Later chunks are merged up to this size: fewer, longer synth calls sound
 # more natural, while the first chunk stays short so playback starts fast.
 _MIN_CHUNK_CHARS = 80
+# No chunk longer than this (about 12 s of speech).
+_MAX_CHUNK_CHARS = 200
+# Speak at most about this much of a reply (~80 s); the rest stays on screen.
+_MAX_SPOKEN_CHARS = 1200
 
 
 def speakable_text(text: str) -> str:
-    """Strip Markdown so TTS doesn't read out symbols, code or URLs."""
-    text = _CODE_BLOCK.sub(" (code shown on screen) ", text)
-    text = _INLINE_CODE.sub(r"\1", text)
-    text = _MD_LINK.sub(r"\1", text)
-    text = _BARE_URL.sub("link", text)
-    text = _LINE_MARKER.sub("", text)
-    text = _EMPHASIS.sub("", text)
-    text = text.replace("|", ", ")
-    lines = (" ".join(line.split()) for line in text.splitlines())
-    return "\n".join(line for line in lines if line)
+    """What to say for a reply: Markdown, symbols, currency and list marks
+    rewritten for the ear (see ``openjarvis.speech.speakable``). Very long
+    replies stop after about a minute with "The rest is on the screen."."""
+    from openjarvis.speech.speakable import to_speech
+
+    return to_speech(text, max_chars=_MAX_SPOKEN_CHARS)
 
 
 def split_for_speech(text: str) -> list[str]:
-    """Split text into sentence chunks for pipelined synthesis."""
-    pieces = [p.strip() for p in _SENTENCE_END.split(text) if p and p.strip()]
+    """Split text into sentence chunks for pipelined synthesis.
+
+    A run-on sentence is cut at commas so no chunk is too long for the voice
+    model (it once disabled fast voice for the rest of the session).
+    """
+    from openjarvis.speech.speakable import split_long
+
+    pieces = [
+        part
+        for p in _SENTENCE_END.split(text)
+        if p and p.strip()
+        for part in split_long(p.strip(), _MAX_CHUNK_CHARS)
+    ]
     chunks: list[str] = []
     for piece in pieces:
-        if len(chunks) > 1 and len(chunks[-1]) < _MIN_CHUNK_CHARS:
+        if (
+            len(chunks) > 1
+            and len(chunks[-1]) < _MIN_CHUNK_CHARS
+            and len(chunks[-1]) + len(piece) < _MAX_CHUNK_CHARS
+        ):
             chunks[-1] = f"{chunks[-1]} {piece}"
         else:
             chunks.append(piece)
@@ -346,6 +435,18 @@ def _key_pressed() -> bool:
         msvcrt.getwch()  # type: ignore[attr-defined]
         pressed = True
     return pressed
+
+
+def _wav_seconds(audio: bytes, sample_rate: int) -> float:
+    """How long a synthesized chunk plays."""
+    import io
+    import wave
+
+    try:
+        with wave.open(io.BytesIO(audio)) as clip:
+            return clip.getnframes() / float(clip.getframerate() or sample_rate)
+    except Exception:
+        return len(audio) / 2.0 / float(sample_rate or 24000)
 
 
 def _synthesize_chunk(
@@ -400,11 +501,19 @@ def speak(
     if not chunks:
         return True
 
+    from openjarvis.core import live
+
     stop = threading.Event()
+    live.clear_stop_speaking()
+    offsets = [sum(len(c) for c in chunks[:i]) for i in range(len(chunks))]
+    total_chars = sum(len(c) for c in chunks)
+    live.emit("speaking", text=text, total=total_chars)
 
     def stop_requested() -> bool:
         if not stop.is_set() and (
-            _key_pressed() or (should_stop is not None and should_stop())
+            _key_pressed()
+            or live.stop_speaking_requested()  # the window's Stop button
+            or (should_stop is not None and should_stop())
         ):
             stop.set()
         return stop.is_set()
@@ -421,14 +530,14 @@ def speak(
 
     def produce() -> None:
         try:
-            for chunk in chunks:
+            for index, chunk in enumerate(chunks):
                 if stop.is_set():
                     return
                 audio = _synthesize_chunk(chunk, console, active_session)
                 if audio is None:
                     put(_NO_TTS_BACKEND)
                     return
-                put(audio)
+                put((*audio, index))
         finally:
             put(_SYNTH_DONE)
 
@@ -448,13 +557,24 @@ def speak(
                 break
             if item is _NO_TTS_BACKEND:
                 console.print(
-                    "[dim yellow]No TTS backend available — install kokoro: "
+                    "[dim yellow]No TTS backend available — install the voice: "
                     "uv sync --extra voice[/dim yellow]"
                 )
                 break
-            audio, sample_rate = item  # type: ignore[misc]
+            audio, sample_rate, index = item  # type: ignore[misc]
             if not audio:
                 continue
+            # What's being said right now and for how long: the window shows
+            # it word by word in time with the voice.
+            live.emit(
+                "say",
+                text=chunks[index],
+                index=index,
+                count=len(chunks),
+                start=offsets[index],
+                total=total_chars,
+                seconds=round(_wav_seconds(audio, sample_rate), 2),
+            )
             finished = voice_io.play_wav(
                 audio, sample_rate=sample_rate, should_stop=stop_requested
             )
@@ -467,6 +587,8 @@ def speak(
     finally:
         stop.set()
         worker.join(timeout=2.0)
+        live.clear_stop_speaking()
+        live.emit("spoken", interrupted=interrupted)
     if interrupted:
         console.print("[dim]Stopped speaking.[/dim]")
     return not interrupted

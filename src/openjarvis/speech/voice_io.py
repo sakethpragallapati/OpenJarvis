@@ -53,6 +53,8 @@ def record_from_stream(
     startup_silence_chunks = max(1, int(startup_silence_seconds * chunks_per_second))
     max_chunks = int(max_seconds * chunks_per_second)
 
+    from openjarvis.core import live
+
     frames: list[bytes] = []
     silence_count = 0
     has_speech = False
@@ -63,6 +65,18 @@ def record_from_stream(
         frames.append(data)
 
         amplitude = _rms(data)
+        if live.active():
+            # The window's ring follows your voice; a typed command or a
+            # pause from the window ends the wait for speech.
+            live.level(
+                "mic",
+                amplitude / max(silence_threshold * 4.0, 1.0),
+                bands=live.spectrum(memoryview(data).cast("h"), sample_rate)
+                if amplitude > silence_threshold
+                else None,
+            )
+            if not has_speech and live.needs_attention():
+                return b""
         if amplitude > silence_threshold:
             has_speech = True
             silence_count = 0
@@ -205,16 +219,32 @@ def play_wav(
         )
         sr = sample_rate
 
+    from openjarvis.core import live
+
     sd.play(data, sr)
-    if should_stop is None:
+    if should_stop is None and not live.active():
         sd.wait()
         return True
 
-    deadline = time.monotonic() + len(data) / float(sr)
+    started = time.monotonic()
+    deadline = started + len(data) / float(sr)
+    window = max(int(sr * 0.05), 1)
     while time.monotonic() < deadline:
-        if should_stop():
+        if should_stop is not None and should_stop():
             sd.stop()
             return False
+        if live.active():
+            # How loud Jarvis is right now (and its spectrum), for the ring.
+            at = int((time.monotonic() - started) * sr)
+            piece = data[at : at + window]
+            if len(piece):
+                if piece.ndim > 1:
+                    piece = piece.mean(axis=1)
+                live.level(
+                    "voice",
+                    float(np.sqrt(np.mean(np.square(piece)))) * 5.0,
+                    bands=live.spectrum(piece, sr),
+                )
         time.sleep(0.05)
     sd.wait()
     return True
