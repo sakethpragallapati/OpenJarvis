@@ -242,10 +242,11 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/open-jarvis/OpenJarvis"
-Documentation = "https://open-jarvis.github.io/OpenJarvis/"
-Repository = "https://github.com/open-jarvis/OpenJarvis"
-Issues = "https://github.com/open-jarvis/OpenJarvis/issues"
+Homepage = "https://github.com/sakethpragallapati/OpenJarvis"
+Documentation = "https://github.com/sakethpragallapati/OpenJarvis/blob/feat/windows-voice-assistant/docs/user-guide/voice-assistant.md"
+Repository = "https://github.com/sakethpragallapati/OpenJarvis"
+Issues = "https://github.com/sakethpragallapati/OpenJarvis/issues"
+Upstream = "https://github.com/open-jarvis/OpenJarvis"
 
 [project.scripts]
 jarvis = "openjarvis.cli:main"
@@ -309,14 +310,7 @@ torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]
 torchaudio = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]
 
 [tool.hatch.build.targets.sdist]
-# Tauri release bundles carry these executables; Python source distributions
-# must not duplicate platform binaries on every PyPI release.
-exclude = [
-    "/desktop/src-tauri/binaries",
-    "/frontend/src-tauri/binaries",
-]
-# The publishing workflow builds this UI before packaging. Keep its generated
-# files even though the directory is intentionally ignored by Git.
+# Keep the server UI's generated files if present (ignored by Git).
 artifacts = ["/src/openjarvis/server/static/**"]
 
 [tool.hatch.build.targets.wheel]
@@ -330,8 +324,6 @@ exclude = [
 "src/openjarvis/agents/claude_code_runner/index.mjs" = "_node_modules/claude_code_runner/index.mjs"
 "src/openjarvis/agents/claude_code_runner/package.json" = "_node_modules/claude_code_runner/package.json"
 "src/openjarvis/channels/whatsapp_baileys_bridge" = "_node_modules/whatsapp_baileys_bridge"
-"scripts/install" = "_install_scripts"
-"deploy/windows" = "_deploy/windows"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

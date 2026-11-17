@@ -34,16 +34,14 @@ To build the wizard yourself: `.\scripts\windows\build-installer.ps1 -Version 0.
 
 ### From source
 
-The voice pieces are optional extras:
+The voice pieces are optional extras. The native extension needs Rust with
+the MSVC build tools:
 
 ```bash
-uv sync --extra desktop --extra voice --extra wakeword --extra agent
+uv sync --extra desktop --extra voice --extra wakeword --extra agent --group desktop-native
 ```
 
-On native Windows the installer can do this for you: answer **y** to
-"Install voice mode", or run it with `-Voice` (`$env:OPENJARVIS_VOICE = '1'`
-under `irm | iex`). On Windows, uv installs the CUDA 12.8 build of PyTorch
-for the voice.
+On Windows, uv installs the CUDA 12.8 build of PyTorch for the voice.
 
 The first `jarvis listen` downloads the ~1 MB wake-word model and the
 Chatterbox-Turbo voice model (~3.8 GB, once).
