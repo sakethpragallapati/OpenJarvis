@@ -1,201 +1,113 @@
 <div align="center">
-  <img alt="OpenJarvis" src="assets/OpenJarvis_Horizontal_Logo.png" width="400">
 
-  <p><i>Personal AI, On Personal Devices.</i></p>
+# J.A.R.V.I.S. for Windows
 
-  <p>
-    <a href="https://arxiv.org/abs/2605.17172"><img src="https://img.shields.io/badge/arXiv-2605.17172-b31b1b.svg" alt="arXiv"></a>
-    <a href="https://openjarvis.stanford.edu/"><img src="https://img.shields.io/badge/project-OpenJarvis-blue" alt="Project"></a>
-    <a href="https://open-jarvis.github.io/OpenJarvis/"><img src="https://img.shields.io/badge/docs-mkdocs-blue" alt="Docs"></a>
-    <img src="https://img.shields.io/badge/python-%3E%3D3.10-blue" alt="Python">
-    <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
-    <a href="https://discord.gg/CMVBmDQ5Fj"><img src="https://img.shields.io/badge/discord-join-7289da?logo=discord&logoColor=white" alt="Discord"></a>
-    <a href="https://x.com/OpenJarvisAI"><img src="https://img.shields.io/badge/X-@OpenJarvisAI-black?logo=x&logoColor=white" alt="X / Twitter"></a>
-  </p>
+**A hands-free voice assistant that runs your Windows PC.**
+Talk to it and it opens apps, websites and files, plays music, sends WhatsApp
+messages, sets alarms, reads your screen, and remembers things. You choose
+whether it thinks on your own PC or in the cloud.
+
+[![Release](https://img.shields.io/github/v/release/sakethpragallapati/OpenJarvis?label=download)](../../releases/latest)
+![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
+
 </div>
 
 ---
 
-<div align="center">
-  <img alt="OpenJarvis demo reel" src="assets/openjarvis_demo_reel.webp" width="75%">
-</div>
-
----
-
-> **[Documentation](https://open-jarvis.github.io/OpenJarvis/)**
->
-> **[Project Site](https://openjarvis.stanford.edu/)**
->
-> **[Paper](https://arxiv.org/abs/2605.17172)**
->
-> **[Leaderboard](https://open-jarvis.github.io/OpenJarvis/leaderboard/)**
->
-> **[Roadmap](https://open-jarvis.github.io/OpenJarvis/development/roadmap/)**
-
-## Jarvis for Windows: download and install
-
-This fork adds **Jarvis**, a hands-free voice assistant that controls your
-Windows PC: apps, websites, files, WhatsApp, music, alarms and the screen.
-It has its own window and tray icon.
+## Download and install
 
 1. Download **`OpenJarvis-Setup-<version>.exe`** from
-   [Releases](../../releases/latest) and run it (Windows 10/11, 64-bit; no
-   admin rights needed).
-2. Choose the brain: **on this PC** (Ollama + `qwen3.5:4b`; private, best
-   with an NVIDIA GPU) or **Groq cloud** (fast on any PC; free API key).
-   You can switch later with the gear icon in the JARVIS window.
-3. Start **Jarvis** from the Start menu and talk.
+   [Releases](../../releases/latest) and run it. It installs for your Windows
+   account only, so no admin rights are needed.
+2. Choose Jarvis's brain. You can switch later in Jarvis's settings.
+   - **On this PC:** Ollama with `qwen3.5:4b`. Private, works offline, and is
+     best with an NVIDIA GPU.
+   - **Groq cloud:** fast on any PC. You'll need a free API key from
+     [console.groq.com/keys](https://console.groq.com/keys).
+3. Setup downloads what Jarvis needs (3-7 GB; 10-30 minutes). Then start
+   **Jarvis** from the Start menu and talk.
 
-See the [voice assistant guide](docs/user-guide/voice-assistant.md) for
-what it can do, settings and troubleshooting.
+Windows SmartScreen may warn about an unknown publisher, because the setup
+isn't code-signed. Click **More info**, then **Run anyway**. You can check the
+download against the `.sha256` file attached to the release.
 
-## Why OpenJarvis?
+### Requirements
 
-Personal AI agents are exploding in popularity, but nearly all of them still route intelligence through cloud APIs. Your "personal" AI continues to depend on someone else's server. At the same time, our [Intelligence Per Watt](https://www.intelligence-per-watt.ai/) research showed that local language models already handle 88.7% of single-turn chat and reasoning queries, with intelligence efficiency improving 5.3× from 2023 to 2025. The models and hardware are increasingly ready. What has been missing is the software stack to make local-first personal AI practical.
+- Windows 10 (1809+) or 11, 64-bit, with a microphone and speakers.
+- About 15 GB of free disk space.
+- For the local brain: an NVIDIA GPU with 6 GB+ of VRAM is recommended. Jarvis
+  runs on the CPU too, just slower, and Groq is fast on any PC.
 
-OpenJarvis is that stack. It is a framework for local-first personal AI, built around three core ideas: shared primitives for building on-device agents; evaluations that treat energy, FLOPs, latency, and dollar cost as first-class constraints alongside accuracy; and a learning loop that improves models using local trace data. The goal is simple: make it possible to build personal AI agents that run locally by default, calling the cloud only when truly necessary. OpenJarvis aims to be both a research platform and a production foundation for local AI, in the spirit of PyTorch.
+## What you can say
 
-## Installation
-
-Pick your platform and run one command. Each installer handles [uv](https://docs.astral.sh/uv/), the Python venv, Ollama, and a starter model — about 3 minutes on broadband.
-
-| Platform | One-liner |
+| Say | Jarvis |
 |---|---|
-| **macOS · Linux · WSL2** | `curl -fsSL https://open-jarvis.github.io/OpenJarvis/install.sh \| bash` |
-| **Native Windows** | `irm https://open-jarvis.github.io/OpenJarvis/install.ps1 \| iex` |
-| **Desktop GUI** | Download `.exe` / `.dmg` / `.deb` / `.rpm` / `.AppImage` from the [latest release](https://github.com/open-jarvis/OpenJarvis/releases/latest) |
+| "Open VS Code", "open the Minecraft server folder", "open my CC notes in desktop" | Opens apps, folders and files, even when the name is partial or misheard |
+| "Open the Amazon page of the iPhone 17", "open the first 3 results" | Opens the real web pages |
+| "Play some Telugu songs", "play my workout playlist", "next song" | Plays in YouTube Music |
+| "What's the weather in Hyderabad?", "compare these two phones" | Searches the web and answers |
+| "Send hi to Ravi on WhatsApp", "call Mom on WhatsApp" | WhatsApp messages and calls (asks before sending) |
+| "Wake me up at 6:30", "remind me in 20 minutes to drink water" | Real Windows alarms and reminders |
+| "What's on my screen?", "click Sign in" | Looks at the screen and clicks by name |
+| "Find my resume", "move it to Documents", "delete the old one" | File tools, limited to your own folders (deletes go to the Recycle Bin) |
+| "Write a Python program that …", "run it" | Writes the code, opens VS Code and reads you the output |
+| "Remember that my bike service is every Friday", "when is my bike service?" | Long-term memory |
 
-Then `jarvis` to start. The Rust extension and larger models continue downloading in the background; `jarvis doctor` shows status.
+Say **"Jarvis"** to interrupt it while it talks. Closing the window keeps
+Jarvis in the tray, muted until you say **"Hey Jarvis"**.
 
-Platform-specific notes (WSL2 setup, native-Windows scheduled-task service, desktop prerequisites, manual / contributor install): see the [installation docs](https://open-jarvis.github.io/OpenJarvis/getting-started/install/).
+## Settings and privacy
 
-## Quick Start
+Click the **gear** in the JARVIS window:
 
-```bash
-jarvis                          # start chatting (default: chat-simple)
-jarvis gui                      # start the graphical browser interface
-jarvis init --preset <name> --force  # replace config with a starter preset
-```
+- **Brain:** a local model (nothing leaves your PC) or Groq. With Groq, your
+  requests, and screenshots when Jarvis looks at the screen, are sent to Groq.
+- **Groq API key:** checked with Groq, then stored in the Windows Credential
+  Manager, never in a file.
+- **Speech-to-text:** local Whisper or Groq Whisper. Groq Whisper helps PCs
+  without an NVIDIA GPU.
 
-`jarvis gui` starts the local API server and frontend, then opens the graphical
-chat interface in your default browser. It requires Node.js 22+ and is
-available from a source checkout; packaged desktop installers are available
-from the [latest release](https://github.com/open-jarvis/OpenJarvis/releases/latest).
+Everything else is in `%USERPROFILE%\.openjarvis\config.toml`. The full guide
+is [docs/user-guide/voice-assistant.md](docs/user-guide/voice-assistant.md):
+features, settings, voices, contacts, alarms and troubleshooting.
 
-> Prefix `jarvis ...` with `uv run`, or `source .venv/bin/activate` first.
-
-| Preset | What it does |
-|---|---|
-| `morning-digest-mac` / `morning-digest-linux` / `morning-digest-minimal` | Spoken daily briefing from email, calendar, health, news |
-| `deep-research` | Multi-hop research across indexed docs with citations |
-| `code-assistant` | Agent with code execution, file I/O, and shell access |
-| `scheduled-monitor` | Stateful agent on a schedule with memory |
-| `chat-simple` | Lightweight conversation, no tools |
-
-Example:
+## Run from source
 
 ```bash
-jarvis init --preset morning-digest-mac --force
-jarvis connect gdrive          # one OAuth covers Gmail / Calendar / Tasks
-jarvis digest --fresh          # generate and play your first briefing
+git clone https://github.com/sakethpragallapati/OpenJarvis.git
+cd OpenJarvis
+uv sync --extra desktop --extra voice --extra wakeword --extra agent --group desktop-native
+uv run jarvis app --install    # Desktop and Start-menu shortcuts
+uv run jarvis app              # the JARVIS window (or: uv run jarvis listen)
 ```
 
-Per-preset deep dives: [morning digest](https://open-jarvis.github.io/OpenJarvis/user-guide/morning-digest/) · [deep research](https://open-jarvis.github.io/OpenJarvis/user-guide/deep-research/) · [code assistant](https://open-jarvis.github.io/OpenJarvis/user-guide/code-assistant/) · [scheduled monitor](https://open-jarvis.github.io/OpenJarvis/user-guide/scheduled-monitor/) · [chat simple](https://open-jarvis.github.io/OpenJarvis/user-guide/chat-simple/) · or the full [quickstart guide](https://open-jarvis.github.io/OpenJarvis/getting-started/quickstart/).
+This needs [uv](https://docs.astral.sh/uv/), Rust with the MSVC build tools
+(for the native extension) and, for the local brain,
+[Ollama](https://ollama.com) with `ollama pull qwen3.5:4b`.
 
-### Skills
-
-Skills teach agents how to better use tools and improve their reasoning. Every skill is a tool — agents discover them from a catalog and invoke them on demand.
+To build the setup wizard (needs Inno Setup 6 too):
 
 ```bash
-# Install skills from public sources
-jarvis skill install hermes:arxiv
-jarvis skill sync hermes --category research
-
-# Use skills with any agent
-jarvis ask "Use the code-explainer skill to explain this Python code: for i in range(5): print(i*2)"
-
-# Optimize skills from your trace history
-jarvis optimize skills --policy dspy
-
-# Benchmark the impact
-jarvis bench skills --max-samples 5 --seeds 42
+powershell -ExecutionPolicy Bypass -File scripts/windows/build-installer.ps1 -Version 0.1.0
 ```
-
-Import from [Hermes Agent](https://github.com/NousResearch/hermes-agent) (~150 skills), [OpenClaw](https://github.com/openclaw/skills) (~13,700 community skills), or any GitHub repo. Skills follow the [agentskills.io](https://agentskills.io/specification) open standard.
-
-See the [Skills User Guide](https://open-jarvis.github.io/OpenJarvis/user-guide/skills/) and [Skills Tutorial](https://open-jarvis.github.io/OpenJarvis/tutorials/skills-workflow/) for details.
-
-### Built-in Agents
-
-OpenJarvis ships with eight built-in agents across three execution modes (on-demand, scheduled, continuous):
-
-| Agent | Type | What it does |
-|-------|------|-------------|
-| `morning_digest` | Scheduled | Daily briefing from email, calendar, health, news — with TTS audio |
-| `deep_research` | On-demand | Multi-hop research with citations across web and local docs |
-| `monitor_operative` | Continuous | Long-horizon monitoring with memory, compression, and retrieval |
-| `orchestrator` | On-demand | Multi-turn reasoning with automatic tool selection |
-| `native_react` | On-demand | ReAct (Thought-Action-Observation) loop agent |
-| `operative` | Continuous | Persistent autonomous agent with state management |
-| `native_openhands` | On-demand | CodeAct — generates and executes Python code |
-| `simple` | On-demand | Single-turn chat, no tools |
-
-See the [User Guide](https://open-jarvis.github.io/OpenJarvis/user-guide/morning-digest/) and [Tutorials](https://open-jarvis.github.io/OpenJarvis/tutorials/) for detailed setup instructions.
-
-Full documentation — including Docker deployment, cloud engines, development setup, and tutorials — at **[open-jarvis.github.io/OpenJarvis](https://open-jarvis.github.io/OpenJarvis/)**.
-
-## Community
-
-- **GitHub:** [github.com/open-jarvis/OpenJarvis](https://github.com/open-jarvis/OpenJarvis)
-- **Discord:** [discord.gg/CMVBmDQ5Fj](https://discord.gg/CMVBmDQ5Fj)
-- **X / Twitter:** [@OpenJarvisAI](https://x.com/OpenJarvisAI)
-- **Docs:** [open-jarvis.github.io/OpenJarvis](https://open-jarvis.github.io/OpenJarvis/)
 
 ## Contributing
 
-We welcome contributions! See the [Contributing Guide](CONTRIBUTING.md) for incentives, contribution types, and the PR process.
+Bug reports, ideas and pull requests are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md), and please follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
-Quick start for contributors:
+## Credits and license
 
-```bash
-git clone https://github.com/open-jarvis/OpenJarvis.git
-cd OpenJarvis
-uv sync --extra dev
-uv run pre-commit install
-uv run pytest tests/ -v
-```
+Jarvis for Windows is made by **Pragallapati Saketh**
+([@sakethpragallapati](https://github.com/sakethpragallapati)). It's built on
+[OpenJarvis](https://github.com/open-jarvis/OpenJarvis) by The OpenJarvis
+Authors (Hazy Research and the Scaling Intelligence Lab, Stanford), described
+in [OpenJarvis: Personal AI, On Personal Devices](https://arxiv.org/abs/2605.17172).
 
-Browse the [Roadmap](https://open-jarvis.github.io/OpenJarvis/development/roadmap/) for areas where help is needed. Comment **"take"** on any issue to get auto-assigned.
+It also uses Chatterbox (Resemble AI), faster-whisper, openWakeWord, Ollama,
+LangGraph, FastMCP, the MCP filesystem server and pywebview, each under its
+own license.
 
-## About
-
-OpenJarvis is part of [Intelligence Per Watt](https://www.intelligence-per-watt.ai/), a research initiative studying the intelligence efficiency of AI systems. The project is developed at [Hazy Research](https://hazyresearch.stanford.edu/) and the [Scaling Intelligence Lab](https://scalingintelligence.stanford.edu/) at [Stanford SAIL](https://ai.stanford.edu/).
-
-## Sponsors
-
-<p>
-  <a href="https://www.laude.org/">Laude Institute</a> &bull;
-  <a href="https://datascience.stanford.edu/marlowe">Stanford Marlowe</a> &bull;
-  <a href="https://cloud.google.com/">Google Cloud Platform</a> &bull;
-  <a href="https://lambda.ai/">Lambda Labs</a> &bull;
-  <a href="https://ollama.com/">Ollama</a> &bull;
-  <a href="https://research.ibm.com/">IBM Research</a> &bull;
-  <a href="https://hai.stanford.edu/">Stanford HAI</a>
-</p>
-
-## Citation
-```bibtex
-@misc{saadfalcon2026openjarvispersonalaipersonal,
-      title={OpenJarvis: Personal AI, On Personal Devices}, 
-      author={Jon Saad-Falcon and Avanika Narayan and Robby Manihani and Tanvir Bhathal and Herumb Shandilya and Hakki Orhun Akengin and Gabriel Bo and Andrew Park and Matthew Hart and Caia Costello and Chuan Li and Christopher Ré and Azalia Mirhoseini},
-      year={2026},
-      eprint={2605.17172},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2605.17172}, 
-}
-```
-
-## License
-
-[Apache 2.0](LICENSE)
+Licensed under the [Apache License 2.0](LICENSE).
